@@ -21,7 +21,7 @@ from tensorflow import keras
 def flag_clouds():
     pass
 
-def load_data(country, farm=None, crop='wheat'):
+def nc_resample2table(country, crop, farm=None):
     harvest_month = {'common winter wheat':7,'grain maize and corn-cob-mix':10, 'spring barley':7}
     crop_data = gpd.read_file(r'D:\DATA\yipeeo\Crop_data\Crop_yield\all\field_scale.shp')
     if farm:
@@ -50,7 +50,10 @@ def load_data(country, farm=None, crop='wheat'):
             year_ind = np.where((ndvi_m.index.year==year)&(ndvi_m.index.month<harvest_month[crop]+1)&(ndvi_m.index.month>harvest_month[crop]-4))[0]
             pipeline_df.loc[df_ind, this_cols] = ndvi_m[year_ind].values
 
-    pipeline_df.to_csv(f'Data/{farm}_{crop}.csv')
+    if farm:
+        pipeline_df.to_csv(f'Data/{farm}_{crop}.csv')
+    else:
+        pipeline_df.to_csv(f'Data/{country}_{crop}.csv')
 
 def calc_corrs(crop, farm):
     file = pd.read_csv(f'Data/{farm}_{crop}.csv', index_col=0)
@@ -64,7 +67,7 @@ def calc_corrs(crop, farm):
         print(f'{predictor} correlation with yield: {cor[0]} with p: {cor[1]}')
 
 def runforecast(crop, farm, lead_time):
-    file = pd.read_csv(f'Data/{farm}_{crop}.csv', index_col=0)
+    file = pd.read_csv(f'Data/not_cloud_filtered/{farm}_{crop}.csv', index_col=0)
     file = file.dropna(axis=0)
     predictors = file.columns[3:]
     used_predictors = [a for a in predictors if int(a[-1])>=lead_time]
@@ -126,13 +129,13 @@ def rundeepcast(crop, farm, lead_time):
 if __name__ == '__main__':
     pd.set_option('display.max_columns', None)
     start_pro = datetime.now()
-    # load_data(country='czr',farm='rost',crop='spring barley')
+    crop = ['grain maize and corn-cob-mix','common winter wheat','spring barley']
+    # nc_resample2table(country='cz',crop=crop[0])
     # calc_corrs(farm='rost',crop='common winter wheat')
     # Crops with most datapoints: grain maize and corn-cob-mix, common winter wheat, spring barley
-    crop = ['grain maize and corn-cob-mix','common winter wheat','spring barley']
     for lead_time in [3,2,1,0]:
         runforecast(farm='rost',crop=crop[1], lead_time=lead_time)
-    # print(f'calculation stopped and took {datetime.now() - start_pro}')
+    print(f'calculation stopped and took {datetime.now() - start_pro}')
     # rundeepcast(farm='rost',crop=crop[1], lead_time=1)
     
     """

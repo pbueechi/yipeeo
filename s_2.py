@@ -10,7 +10,6 @@ import pandas as pd
 import geopandas as gpd
 import multiprocessing as mp
 import matplotlib.gridspec as gridspec
-# import cmcrameri as cm
 import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -21,8 +20,6 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from rasterio.mask import mask
 from pystac.extensions.eo import EOExtension as eo
-from s2cloudless import S2PixelCloudDetector, download_bands_and_valid_data_mask
-
 
 def plot_s2_class(region, year=None):
     """
@@ -145,7 +142,6 @@ def plot_s2_class(region, year=None):
     # fig.tight_layout()
     plt.savefig('Figures/scene_class_25.png', dpi=300)
 
-
 def extract_s2(region, year=None, new=True):
     """
     :param region: str of region where fields are located which will be extract from S-2 L2A data. So far available: czr, nl, rom, ukr_chmel, ukr_horod, ukr_lviv
@@ -224,9 +220,14 @@ def extract_s2(region, year=None, new=True):
     #2nd round fails at 58 (2022-03-26); 37 2021-09-14; 48 2021-04-05; 50 2020-07-19; 48 2020-02-02; 48 2019-07-07;
     #48 2018-12-04, 46 2018-07-05, 51 2017-10-13 (434:)
     #Error but continues: 76 2022-01-02
+    #horod 41 2021-09-02; 477 2018-11-07
     ###
-    for it_num,item in enumerate(items):
+    for it_num,item in enumerate(items[499:]):
         print(it_num, item.datetime.date())
+        # if (it_num>0) and (item.datetime.date()==prev_date):
+        #     print('date already covered')
+        #     continue
+        # prev_date = item.datetime.date()
         signed_item = planetary_computer.sign(item)
         for band in bands:
             #Load S2 scenes
@@ -339,8 +340,8 @@ def table2nc(region):
             _, med_daily = target_var.align(med_field, axis=0)
 
             _, std_daily = target_var.align(std_field, axis=0)
-            # med_daily = med_daily.replace(np.nan, -9999)
-            # std_daily = std_daily.replace(np.nan, -9999)
+            med_daily = med_daily.replace(np.nan, -9999)
+            std_daily = std_daily.replace(np.nan, -9999)
 
             #Establish new xr Dataset in first loop. Afterwards add bands to this file.
             if b == 0:
@@ -367,7 +368,7 @@ def table2nc(region):
                     xr_file[f'{band}_std'] = xr.DataArray.from_series(std_daily).astype('int32')
             if band == 'SCL':
                 xr_file['SCL_mode'].attrs = dict(
-                    FillValue=np.nan,
+                    FillValue=-9999,
                     units='-',
                     long_name='Sentinel-2 Scene Classification',
                     scl_values=[0,1,2,3,4,5,6,7,8,9,10,11],
@@ -377,13 +378,13 @@ def table2nc(region):
                 )
             else:
                 xr_file[f'{band}_median'].attrs = dict(
-                    FillValue=np.nan,
+                    FillValue=-9999,
                     units='-',
                     long_name=f'median of all Sentinel-2 {band} pixels laying within field',
                     value_range='1-10000'
                 )
                 xr_file[f'{band}_std'].attrs = dict(
-                    FillValue=np.nan,
+                    FillValue=-9999,
                     units='-',
                     long_name=f'std of all Sentinel-2 {band} pixels laying within field',
                     value_range='1-10000'
@@ -402,11 +403,11 @@ def indices_calc(B2,B4,B8,B11,B12):
     """
     ts = B2.time.values
 
-    B2 = np.where(B2==-9999, np.nan, B2)
-    B4 = np.where(B4==-9999, np.nan, B4)
-    B8 = np.where(B8==-9999, np.nan, B8)
-    B11 = np.where(B11==-9999, np.nan, B11)
-    B12 = np.where(B12==-9999, np.nan, B12)
+    B2 = np.where(B2<=-9999, np.nan, B2/10000)
+    B4 = np.where(B4<=-9999, np.nan, B4/10000)
+    B8 = np.where(B8<=-9999, np.nan, B8/10000)
+    B11 = np.where(B11<=-9999, np.nan, B11/10000)
+    B12 = np.where(B12<=-9999, np.nan, B12/10000)
 
     ndvi = (B8-B4)/(B8+B4)
     evi = 2.5*(B8-B4)/((B8+6*B4-7.5*B2)+1)
@@ -427,6 +428,7 @@ def indices_calc(B2,B4,B8,B11,B12):
 
 def add_indices2nc(file_path):
     files = os.listdir((file_path))
+    files = [file for file in files if file.endswith('.nc')]
     for file in files:
         ds = xr.open_dataset(os.path.join(file_path, file))
 
@@ -439,7 +441,7 @@ def add_indices2nc(file_path):
 
         ds['ndvi'] = ndvi
         ds['ndvi'].attrs = dict(
-            FillValue=np.nan,
+            # FillValue=np.nan,
             units='-',
             long_name='Normalized Difference Vegetation Index',
             value_range='-1 to 1'
@@ -447,7 +449,7 @@ def add_indices2nc(file_path):
 
         ds['evi'] = evi
         ds['evi'].attrs = dict(
-            FillValue=np.nan,
+            # FillValue=np.nan,
             units='-',
             long_name='Enhanced Vegetation Index',
             value_range='-1 to 1'
@@ -455,7 +457,7 @@ def add_indices2nc(file_path):
 
         ds['ndwi'] = ndwi
         ds['ndwi'].attrs = dict(
-            FillValue=np.nan,
+            # FillValue=np.nan,
             units='-',
             long_name='Normalized Difference Water Index',
             value_range='-1 to 1'
@@ -463,7 +465,7 @@ def add_indices2nc(file_path):
 
         ds['nmdi'] = nmdi
         ds['nmdi'].attrs = dict(
-            FillValue=np.nan,
+            # FillValue=np.nan,
             units='-',
             long_name='Normalized Multiband Drought Index',
             value_range='0 to ~1'
@@ -472,6 +474,113 @@ def add_indices2nc(file_path):
         if not os.path.exists(os.path.join(file_path,'new')):
             os.makedirs(os.path.join(file_path,'new'))
         ds.to_netcdf(path=os.path.join(file_path,'new', file))
+
+def plot_s2_ex(region):
+    """
+    :return: Plots the data of Sentinel-2 band 2 for checking the impact of scene classification masking
+    """
+    path = rf'D:\data-write\YIPEEO\predictors\S2_L2A\ts\{region}\nc\cleaned\new'
+    fields = os.listdir(path)
+    fields = [field for field in fields if field.endswith('.nc')]
+    print(fields)
+    #Load required data
+    ds = xr.open_dataset(os.path.join(path, fields[0]))
+    cc = ds.cloud_cover.values
+    b2 = ds.evi.values
+    scl = ds.SCL_mode.values
+    time = ds.time.values
+
+    time = time[b2>-9999]
+    cc = cc[b2>-9999]
+    scl = scl[b2>-9999]
+    b2 = b2[b2>-9999]
+
+    a = pd.DataFrame(columns=['b2', 'cc', 'scl'], index=time)
+    a.loc[:, 'b2'] = b2
+    a.loc[:, 'cc'] = cc
+    a.loc[:, 'scl'] = scl
+    # print(a.head(50))
+
+    ok_scene_class = [4, 5, 6, 11]  # scl as in https://www.sciencedirect.com/science/article/pii/S0924271623002654
+    a_mask = np.in1d(a.scl, ok_scene_class)
+    a_masked = a.iloc[a_mask, :]
+
+    #Sentinel-2 processing changed on 2022-01-25 introducing an offset of 1000
+    #https://github.com/stactools-packages/sentinel2/issues/44
+    # offset_loc = np.where(a_masked.index>='2022-01-25')[0]
+    # a_masked.iloc[offset_loc,0] = a_masked.iloc[offset_loc,0]-1000
+
+    #plotting
+    plt.plot(a.index, a.b2)
+    # plt.plot(a_masked.index, a_masked.b2)
+    # plt.plot(a_masked.index, removeOutliers(a_masked.b2))
+    # plt.legend(['all_s2_data','2022 adjusted','clean data'])
+    plt.xticks(rotation=45)
+    plt.subplots_adjust(bottom=0.15)
+    plt.show()
+    # plt.savefig('Figures/cloud_masking_impact_clean_2016.png', dpi=300)
+    #ToDo check if higher values in 2022 occur everywhere
+
+def removeOutliers(x, outlierConstant=2):
+    a = np.array(x)
+    upper_quartile = np.percentile(a, 75)
+    lower_quartile = np.percentile(a, 25)
+    IQR = (upper_quartile - lower_quartile) * outlierConstant
+    quartileSet = (lower_quartile - IQR, upper_quartile + IQR)
+    a = np.where(((a>=quartileSet[0]) & (a<=quartileSet[1])),a,np.nan)
+    return a
+
+def cleaning_s2(region):
+    """
+    :param region:
+    :return:
+    """
+    path = rf'D:\data-write\YIPEEO\predictors\S2_L2A\ts\{region}\nc'
+    fields = os.listdir(path)
+    fields = [field for field in fields if field.endswith('.nc')]
+
+    bands = ['B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B11', 'B12']
+    bands = [band+'_median' for band in bands]
+
+    #Load required data
+    for field in fields:
+        print(field)
+        #Load file and extract scene classification
+        ds = xr.open_dataset(os.path.join(path, field))
+        scl = ds.SCL_mode.values
+        if np.sum(scl==[-9999]*len(scl))==len(scl):
+            print(f'file {field} has only nan values')
+            continue
+
+        # Sentinel-2 processing changed on 2022-01-25 introducing an offset of 1000
+        # https://github.com/stactools-packages/sentinel2/issues/44
+
+        time = ds.time.values
+        offset_loc = np.where(time>=pd.to_datetime('2022-01-25', format='%Y-%m-%d'))[0]
+        #Establish mask with valid observations. I.e. Scene classification without clouds, snow etc.
+        #scl as in https://www.sciencedirect.com/science/article/pii/S0924271623002654
+        ok_scene_class = [4, 5, 6, 11]
+        a_mask = np.in1d(scl, ok_scene_class)
+
+        #Load all bands, mask them with scl mask and remove outliers
+        for band in bands:
+            band_values = ds[band].values
+            #remove offset of 1000 since Jan 25 2022
+            band_values[offset_loc] = band_values[offset_loc]-1000
+            band_values_masked = band_values[a_mask]
+
+            #remove outliers
+            band_values_masked_no_ol = removeOutliers(band_values_masked)
+            ds[band].values = [-9999]*len(ds[band].values)
+            ds[band].values[a_mask] = band_values_masked_no_ol
+
+        path_out = os.path.join(path, 'cleaned')
+        if not os.path.exists(path_out):
+            os.makedirs(path_out)
+        ds.to_netcdf(os.path.join(path_out, field))
+
+
+
 
 def ecostress():
     pass
@@ -484,9 +593,15 @@ if __name__ == '__main__':
     # print('started calculating...')
     # plot_s2_class(region='czr')
     # extract_s2(region='czr', new=False)
-    table2nc(region='czr')
-    # path = r'D:\data-write\YIPEEO\predictors\S2_L2A\ts\ukr_horod\nc'
-    # add_indices2nc(file_path=path)
+    # cleaning_s2(region='czr')
+    plot_s2_ex(region='ukr_lviv')
+
+    # for region in ['ukr_lviv']:
+    #     print(region)
+        # extract_s2(region=region, new=False)
+        # table2nc(region=region)
+        # cleaning_s2(region=region)
+        # add_indices2nc(file_path=rf'D:\data-write\YIPEEO\predictors\S2_L2A\ts\{region}\nc\cleaned')
     # ecostress()
     print(f'calculation stopped and took {datetime.now() - start_pro}')
     # parallel_run(path=field_shape_path)

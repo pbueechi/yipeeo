@@ -15,11 +15,12 @@ from glob import glob
 from datetime import datetime
 from scipy.stats import pearsonr, spearmanr
 from sklearn import svm
+from sklearn.feature_selection import RFE
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression, Lasso
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, cross_val_score, cross_validate
+from sklearn.model_selection import train_test_split, cross_val_score, cross_validate, RandomizedSearchCV
 from sklearn.dummy import DummyRegressor
 # from tensorflow import keras
 
@@ -154,10 +155,11 @@ class nc2table:
 
 
 class ml:
-    def __init__(self, crop, country, farm=None):
+    def __init__(self, crop, country, temp_res='M', farm=None):
         self.crop = crop
         self.country = country
         self.farm = farm
+        self.temp_res = temp_res
 
     #---------------------------------------------- Exploratory data analysis ----------------------------------------
     def calc_corrs(self):
@@ -190,19 +192,66 @@ class ml:
         if not lt or preds:
             plt.savefig('Figures/Predictor_analysis/cor_matrix_all.png', dpi=300)
 
-    #---------------------------------------------- Set up models ----------------------------------------------------
-    def runforecast(self, lead_time, predictors, model='RF'):
-        file = pd.read_csv(f'Data/2W/{self.country}_{self.crop}_{predictors}.csv', index_col=0)
-        file = file.dropna(axis=0)
-        predictors = [p for p in file.columns[3:] if not p == 'date_last_obs']
-        used_predictors = [a for a in predictors if int(a[-1]) >= lead_time]
-        predictor_file = self.merge_previous_months(file.loc[:, used_predictors])
-        # predictor_file = file.loc[:, used_predictors]
-        X, X_test, y, y_test = train_test_split(predictor_file, file.loc[:, 'yield'], test_size=0.2, random_state=5)
+    #---------------------------------------------- Model tuning -----------------------------------------------------
+    def model_selection(self):
+        pass
 
-        pipe = Pipeline([('scalar', StandardScaler()), ('clf', self.get_default_regressions(model))])
-        scores_kf = cross_val_score(pipe, X, y, cv=10, scoring="explained_variance")
-        print(f'train perf for lead_time:{lead_time}, R^2: {np.nanmean(scores_kf)}')
+    def feature_selection(self, X, y, n_features=10):
+        # X, X_val, y, y_val = train_test_split(X, y, test_size=0.2, random_state=5)
+        predictors = X.columns
+        estimator = self.get_default_regressions('RF')
+        selector = RFE(estimator, n_features_to_select=n_features, verbose=0)
+        selector = selector.fit(X, y)
+
+        selected_features = list(itertools.compress(predictors,selector.support_))
+        X_s = X.loc[:,selected_features]
+        print(selected_features)
+        return selected_features, X_s
+
+
+    def hyper_tune(self, lead_time, feature_selection=True):
+        X, X_test, y, y_test = self.get_train_test(lead_time=lead_time)
+        if feature_selection:
+            # selected_features,_ = self.feature_selection(X,y)
+            selected_features = ['sig0_vh_mean_daily_LT4', 'sig0_vh_mean_daily_LT3', 'sig0_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT3', 'sig40_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT2', 'sig40_vv_mean_daily_LT1', 'ndvi_LT1', 'evi_LT1', 'nmdi_LT1']
+
+            X, X_test = X.loc[:,selected_features], X_test.loc[:,selected_features]
+
+        #Check Probst et al. (2019) for settings  or:
+        #https://gsverhoeven.github.io/post/random-forest-rfe_vs_tuning/
+        params = {'max_depth': [20, None],
+                  'min_samples_split': [2, 5, 10],
+                  'n_estimators': [50, 100, 250],
+                  'bootstrap': [True, False]}
+
+        estimator = self.get_default_regressions('RF')
+        train_features, test_features, train_labels, test_labels = train_test_split(X, y, test_size=0.2)
+        rf_random = RandomizedSearchCV(estimator=estimator, param_distributions=params, n_iter=50, cv=20, n_jobs=6,
+                                       verbose=1)
+        rf_random.fit(train_features, train_labels)
+        print(rf_random.best_params_)
+        estimator.set_params(**rf_random.best_params_)
+        pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+        scores_kf = cross_val_score(pipe, X, y, cv=20, scoring="explained_variance")
+        print(f'train perf for lead_time:{lead_time}, R^2: {np.median(scores_kf)}')
+        return rf_random.best_params_
+
+    #---------------------------------------------- Set up models ----------------------------------------------------
+    def runforecast(self, lead_time, model='RF', merge_months=False, feature_select=False):
+        X, X_test, y, y_test = self.get_train_test(lead_time=lead_time, merge_months=merge_months)
+        if feature_select:
+            # _, X = self.feature_selection(X,y, n_features=10)
+            selected_features = ['sig0_vh_mean_daily_LT4', 'sig0_vh_mean_daily_LT3', 'sig0_cr_mean_daily_LT3',
+                                 'sig40_vh_mean_daily_LT3', 'sig40_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT2',
+                                 'sig40_vv_mean_daily_LT1', 'ndvi_LT1', 'evi_LT1', 'nmdi_LT1']
+            X, X_test = X.loc[:, selected_features], X_test.loc[:, selected_features]
+
+        estimator = self.get_default_regressions(model)
+        hp_tuned_vals = {'n_estimators': 250, 'min_samples_split': 5, 'max_depth': None, 'bootstrap': True}
+        estimator.set_params(**hp_tuned_vals)
+        pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+        scores_kf = cross_val_score(pipe, X, y, cv=20, scoring="explained_variance")
+        print(f'train perf for lead_time:{lead_time}, R^2: {np.median(scores_kf)}')
         return scores_kf
 
     def runforecast_loocv(self, lead_time, preds=None, model='RF'):
@@ -216,11 +265,8 @@ class ml:
         used_predictors = [a for a in predictors if int(a[-1]) >= lead_time]
         predictor_file = self.merge_previous_months(file.loc[:, used_predictors])
         years = file.c_year
-        # value_counts()
         years_obs = years.value_counts()
         years_test = years_obs[years_obs>min_obs].index
-
-        # predictor_file = file.loc[:, used_predictors]
 
         # X, X_test, y, y_test = train_test_split(predictor_file, file.loc[:, 'yield'], test_size=0.2, random_state=5)
         #
@@ -273,21 +319,23 @@ class ml:
     #--------------------------------------------- Run and evaluate models -------------------------------------------
     def write_results(self):
         cols = ['lead_time', 's1', 's2', 'all']
-        lead_times = [8, 7, 6, 5, 4, 3, 2, 1]
+        if self.temp_res=='2W':
+            lead_times = [8, 7, 6, 5, 4, 3, 2, 1]
+        elif self.temp_res=='M':
+            lead_times = [4, 3, 2, 1]
         csv_file = pd.DataFrame(data=None, index=lead_times, columns=cols)
         csv_file.loc[:, 'lead_time'] = lead_times
         for lead_time in lead_times:
             for pred in cols[1:]:
-                csv_file.loc[lead_time, pred] = self.runforecast(country=self.country, crop=self.crop,
-                                                                 lead_time=lead_time, predictors=pred)
-        csv_file.to_pickle('Results/Validation/s1_vs_s2.csv')
+                csv_file.loc[lead_time, pred] = self.runforecast(lead_time=lead_time, predictors=pred, merge_months=False)
+        csv_file.to_pickle(f'Results/Validation/s1_vs_s2_{self.temp_res}_unmerged.csv')
 
     def plot_res(self):
         """
         :return: Plots the results generated by self.write_results to a boxplot comparing the performance of the model
                     using S-1, S-2, and all data
         """
-        file = pd.read_pickle('Results/Validation/s1_vs_s2.csv')
+        file = pd.read_pickle(f'Results/Validation/s1_vs_s2_{self.temp_res}_unmerged.csv')
         s1 = file.loc[:, ['lead_time', 's1']]
         s2 = file.loc[:, ['lead_time', 's2']]
         all = file.loc[:, ['lead_time', 'all']]
@@ -300,10 +348,13 @@ class ml:
 
         final = pd.concat([s1, s2, all])
         s = seaborn.boxplot(data=final.explode('perf'), x='lead_time', y='perf', hue='predictors')
-        s.set_xticklabels(np.linspace(2, 16, 8))
+        if self.temp_res=='2W':
+            s.set_xticklabels(np.linspace(2, 16, 8))
+        elif self.temp_res=='M':
+            s.set_xticklabels(np.linspace(4, 16, 4))
         s.set_xlabel('Lead Time [weeks]')
         s.set_ylabel('explained variance')
-        plt.savefig('Figures/performance_wheat_s1_2.png', dpi=300)
+        plt.savefig(f'Figures/ml_validation/performance_wheat_s1_2_{self.temp_res}_unmerged.png', dpi=300)
 
     #--------------------------------------------- Auxiliary functions -----------------------------------------------
     def get_default_regressions(self, regression_names):
@@ -354,6 +405,9 @@ class ml:
         elif 'RF' in regression_names:
             RF = RandomForestRegressor(
                 n_estimators=200,
+                # min_samples_split=10,
+                # max_leaf_nodes=5,
+                # max_depth=None,
             )
             regressions = RF
 
@@ -374,6 +428,7 @@ class ml:
 
         return regressions
 
+    #ToDo merge only from t-2 on
     def merge_previous_months(self, file):
         all_predictors = file.columns
         lead_times = np.unique([int(a[-1]) for a in all_predictors])
@@ -392,6 +447,7 @@ class ml:
 
         return file_out
 
+    #ToDo: finish select_preds
     def select_preds(self, file, lt, preds):
         if lt and preds:
             raise ValueError('Please only use lt or preds')
@@ -407,12 +463,29 @@ class ml:
             file = file.loc[:,used_pred]
         return file
 
+    def get_train_test(self, lead_time, merge_months=False):
+        file = pd.read_csv(f'Data/{self.temp_res}/{self.country}_{self.crop}_all.csv', index_col=0)
+        file = file.dropna(axis=0)
+        predictors = [p for p in file.columns[3:] if not p == 'date_last_obs']
+        used_predictors = [a for a in predictors if int(a[-1]) >= lead_time]
+        if merge_months:
+            predictor_file = self.merge_previous_months(file.loc[:, used_predictors])
+        else:
+            predictor_file = file.loc[:, used_predictors]
+
+        X, X_test, y, y_test = train_test_split(predictor_file, file.loc[:, 'yield'], test_size=0.2, random_state=5)
+        return X, X_test, y, y_test
+
 
 
 
 if __name__ == '__main__':
+    #ToDo: finish feature selection, hypertune, check test/train performance, leave one year out, feature_selection based on crosscors
+    #Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
     pd.set_option('display.max_columns', 15)
     start_pro = datetime.now()
+
+    # Predictors resampling
     crops = ['grain maize and corn-cob-mix','common winter wheat','spring barley']
     # for crop in crops:
     #     a = nc2table(country='cz', crop=crop)
@@ -420,11 +493,16 @@ if __name__ == '__main__':
     #     # a.resample_s2(temp_step='M')
     #     a.merge_tabs(temp_res='2W')
     #     a.merge_tabs(temp_res='M')
-    # write_results()
-    # plot_res()
-    # for lead_time in [8, 7, 6, 5, 4, 3, 2, 1]:
-    a = ml(crop=crops[1], country='cz')
-    a.runforecast_loocv(lead_time=1, preds=['sig40_vh','ndvi'], )
+
+    # Forecasting
+    a = ml(crop=crops[1], country='cz', temp_res='M')
+    # a.hyper_tune(lead_time=1)
+    a.runforecast(lead_time=1, feature_select=True)
+
+
+    # a.write_results()
+    # a.plot_res()
+    # a.runforecast_loocv(lead_time=1, preds=['sig40_vh','ndvi'])
     # a.cross_cor_predictors(preds=['sig40_vh','ndvi'])
     # for lead_time in [2,1]:
     #     a = ml()
@@ -432,12 +510,6 @@ if __name__ == '__main__':
         # a.rundeepcast(farm='rost',crop=crop[1], lead_time=1)
     print(f'calculation stopped and took {datetime.now() - start_pro}')
 
+
     
-    """
-    Cloud mask:
-    https://sentinels.copernicus.eu/web/sentinel/technical-guides/sentinel-2-msi/level-2a/algorithm-overview
-    https://github.com/sentinel-hub/sentinel2-cloud-detector
-    ECOSTRESS:
-    https://cmr.earthdata.nasa.gov/search/
-    """
 

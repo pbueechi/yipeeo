@@ -176,30 +176,34 @@ class ml:
             print(f'{predictor} correlation with yield: {cor[0]} with p: {cor[1]}')
 
     def cross_cor_predictors(self, lt=None, preds=None):
-        file = pd.read_csv(f'Data/2W/{self.country}_{self.crop}_all.csv', index_col=0).iloc[:,3:-1]
+        file = pd.read_csv(f'Data/{self.temp_res}/{self.country}_{self.crop}_all.csv', index_col=0).iloc[:,3:-1]
         file = self.select_preds(file=file, lt=lt, preds=preds)
+        ticknames = [i.replace('_mean_daily', '') for i in file.columns]
+        file.columns = ticknames
         matrix = file.corr(method='pearson')
         plt.figure(figsize=(15, 15), dpi=300)
         mask = np.triu(np.ones_like(matrix, dtype=bool))
-        seaborn.heatmap(matrix, annot=True, mask=mask, cmap=cmr.vik_r, vmin=-0.9, vmax=0.9)
-        plt.yticks(rotation=0)
-        plt.xticks(rotation=45)
+        ax = seaborn.heatmap(matrix, annot=False, mask=mask, cmap=cmr.vik_r, vmin=-0.9, vmax=0.9)
+        plt.yticks(rotation=0, fontsize=20)
+        plt.xticks(rotation=45, fontsize=20)
+        cbar = ax.collections[0].colorbar
+        cbar.ax.tick_params(labelsize=20)
         # plt.show()
         if lt:
-            plt.savefig(f'Figures/Predictor_analysis/cor_matrix_{lt}.png', dpi=300)
+            plt.savefig(f'Figures/Predictor_analysis/cor_matrix_{lt}_{self.temp_res}.png', dpi=300)
         if preds:
-            plt.savefig(f'Figures/Predictor_analysis/cor_matrix_small.png', dpi=300)
-        if not lt or preds:
-            plt.savefig('Figures/Predictor_analysis/cor_matrix_all.png', dpi=300)
+            plt.savefig(f'Figures/Predictor_analysis/cor_matrix_fewpreds_{self.temp_res}.png', dpi=300)
+        if not lt and not preds:
+            plt.savefig(f'Figures/Predictor_analysis/cor_matrix_all_{self.temp_res}.png', dpi=300)
 
     #---------------------------------------------- Model tuning -----------------------------------------------------
     def model_selection(self):
         pass
 
-    def feature_selection(self, X, y, n_features=10):
+    def feature_selection(self, X, y, model, n_features=10):
         # X, X_val, y, y_val = train_test_split(X, y, test_size=0.2, random_state=5)
         predictors = X.columns
-        estimator = self.get_default_regressions('RF')
+        estimator = self.get_default_regressions(model)
         selector = RFE(estimator, n_features_to_select=n_features, verbose=0)
         selector = selector.fit(X, y)
 
@@ -209,74 +213,124 @@ class ml:
         return selected_features, X_s
 
 
-    def hyper_tune(self, lead_time, feature_selection=True):
+    def hyper_tune(self, lead_time, selected_features, model='RF'):
         X, X_test, y, y_test = self.get_train_test(lead_time=lead_time)
-        if feature_selection:
-            # selected_features,_ = self.feature_selection(X,y)
-            selected_features = ['sig0_vh_mean_daily_LT4', 'sig0_vh_mean_daily_LT3', 'sig0_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT3', 'sig40_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT2', 'sig40_vv_mean_daily_LT1', 'ndvi_LT1', 'evi_LT1', 'nmdi_LT1']
-
-            X, X_test = X.loc[:,selected_features], X_test.loc[:,selected_features]
+        # selected_features = ['sig0_vh_mean_daily_LT4', 'sig0_vh_mean_daily_LT3', 'sig0_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT3', 'sig40_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT2', 'sig40_vv_mean_daily_LT1', 'ndvi_LT1', 'evi_LT1', 'nmdi_LT1']
+        X, X_test = X.loc[:,selected_features], X_test.loc[:,selected_features]
 
         #Check Probst et al. (2019) for settings  or:
         #https://gsverhoeven.github.io/post/random-forest-rfe_vs_tuning/
-        params = {'max_depth': [20, None],
-                  'min_samples_split': [2, 5, 10],
-                  'n_estimators': [50, 100, 250],
-                  'bootstrap': [True, False]}
+        if model=='XGB':
+            params = {'max_depth': [3, 6, 10],
+                      'learning_rate': [0.1, 0.3, 0.5],
+                      'n_estimators': [100, 500, 1000],
+                      'colsample_bytree': [0.5, 1]}
 
-        estimator = self.get_default_regressions('RF')
+        elif model=='RF':
+            params = {'max_depth': [20, None],
+                      'min_samples_split': [2, 5, 10],
+                      'n_estimators': [50, 100, 250],
+                      'bootstrap': [True, False]}
+
+        estimator = self.get_default_regressions(model)
         train_features, test_features, train_labels, test_labels = train_test_split(X, y, test_size=0.2)
         rf_random = RandomizedSearchCV(estimator=estimator, param_distributions=params, n_iter=50, cv=20, n_jobs=6,
-                                       verbose=1)
+                                       verbose=0, random_state=1)
         rf_random.fit(train_features, train_labels)
-        print(rf_random.best_params_)
+        # print(rf_random.best_params_)
         estimator.set_params(**rf_random.best_params_)
         pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
         scores_kf = cross_val_score(pipe, X, y, cv=20, scoring="explained_variance")
-        print(f'train perf for lead_time:{lead_time}, R^2: {np.median(scores_kf)}')
         return rf_random.best_params_
 
     #---------------------------------------------- Set up models ----------------------------------------------------
-    def runforecast(self, lead_time, model='RF', merge_months=False, feature_select=False):
+    def runforecast(self, lead_time, model='RF', merge_months=False, feature_select=False, hyper_tune=False):
         X, X_test, y, y_test = self.get_train_test(lead_time=lead_time, merge_months=merge_months)
-        if feature_select:
-            # _, X = self.feature_selection(X,y, n_features=10)
-            selected_features = ['sig0_vh_mean_daily_LT4', 'sig0_vh_mean_daily_LT3', 'sig0_cr_mean_daily_LT3',
-                                 'sig40_vh_mean_daily_LT3', 'sig40_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT2',
-                                 'sig40_vv_mean_daily_LT1', 'ndvi_LT1', 'evi_LT1', 'nmdi_LT1']
-            X, X_test = X.loc[:, selected_features], X_test.loc[:, selected_features]
-
         estimator = self.get_default_regressions(model)
-        hp_tuned_vals = {'n_estimators': 250, 'min_samples_split': 5, 'max_depth': None, 'bootstrap': True}
-        estimator.set_params(**hp_tuned_vals)
         pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
-        scores_kf = cross_val_score(pipe, X, y, cv=20, scoring="explained_variance")
+        scores_kf = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
         print(f'train perf for lead_time:{lead_time}, R^2: {np.median(scores_kf)}')
-        return scores_kf
+        if feature_select:
+            selected_features, _ = self.feature_selection(X,y, model=model, n_features=10)
+            # selected_features = ['sig0_vh_mean_daily_LT4', 'sig0_vh_mean_daily_LT3', 'sig0_cr_mean_daily_LT3',
+            #                      'sig40_vh_mean_daily_LT3', 'sig40_cr_mean_daily_LT3', 'sig40_vh_mean_daily_LT2',
+            #                      'sig40_vv_mean_daily_LT1', 'ndvi_LT1', 'evi_LT1', 'nmdi_LT1']
+            # selected_features = [p for p in X.columns if p.startswith(tuple(['sig40_vh','evi']))]
 
-    def runforecast_loocv(self, lead_time, preds=None, model='RF'):
-        min_obs = 15
-        file = pd.read_csv(f'Data/2W/{self.country}_{self.crop}_all.csv', index_col=0)
-        file = file.dropna(axis=0)
-        if preds:
-            predictors = [p for p in file.columns if p.startswith(tuple(preds))]
+            X, X_test = X.loc[:, selected_features], X_test.loc[:, selected_features]
+            estimator = self.get_default_regressions(model)
+            pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+            scores_kf_fe = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
+            print(f'train perf for lead_time:{lead_time} after FE, R^2: {np.median(scores_kf_fe)}')
         else:
-            predictors = [p for p in file.columns[3:] if not p == 'date_last_obs']
-        used_predictors = [a for a in predictors if int(a[-1]) >= lead_time]
-        predictor_file = self.merge_previous_months(file.loc[:, used_predictors])
-        years = file.c_year
-        years_obs = years.value_counts()
-        years_test = years_obs[years_obs>min_obs].index
+            selected_features = X.columns
+            scores_kf_fe = []
 
-        # X, X_test, y, y_test = train_test_split(predictor_file, file.loc[:, 'yield'], test_size=0.2, random_state=5)
-        #
-        # pipe = Pipeline([('scalar', StandardScaler()), ('clf', self.get_default_regressions(model))])
-        #
-        # pipe.fit(X, y)
-        # y_test_pred = pipe.predict(X_test)
-        # y_train_pred = pipe.predict(X)
-        # print(f'test perf: {pearsonr(y_test_pred,y_test)[0]}')
-        # print(f'train perf: {pearsonr(y_train_pred, y)[0]}')
+        if hyper_tune:
+            X, X_test, y, y_test = self.get_train_test(lead_time=lead_time, merge_months=merge_months)
+            hp_tuned_vals = self.hyper_tune(lead_time=lead_time, model=model, selected_features=X.columns)
+            estimator.set_params(**hp_tuned_vals)
+            pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+            scores_kf_hp = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
+            print(f'train perf for lead_time:{lead_time} after hp tuning, R^2: {np.median(scores_kf_hp)}')
+        else:
+            scores_kf_hp = []
+
+        if hyper_tune and feature_select:
+            hp_tuned_vals = self.hyper_tune(lead_time=lead_time, model=model, selected_features=selected_features)
+            estimator.set_params(**hp_tuned_vals)
+            pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+            scores_kf_fe_hp = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
+            print(f'train perf for lead_time:{lead_time} after hp tuning and FE, R^2: {np.median(scores_kf_fe_hp)}')
+        else:
+            scores_kf_fe_hp = []
+
+        return scores_kf, scores_kf_fe, scores_kf_hp, scores_kf_fe_hp
+
+    def runforecast_loocv(self, model='RF', min_obs=15):
+        file = pd.read_csv(f'Data/{self.temp_res}/{self.country}_{self.crop}_all.csv', index_col=0)
+        file = file.dropna(axis=0)
+        predictors = [p for p in file.columns[3:] if not p == 'date_last_obs']
+
+        lead_times = [4,3,2,1]
+        cols = ['year', 'observed'] + [f'forecast_LT_{lt}' for lt in lead_times]
+        results = pd.DataFrame(index=[], columns=cols)
+
+        for l,lead_time in enumerate(lead_times):
+            used_predictors = [a for a in predictors if int(a[-1]) >= lead_time]
+            years = file.c_year
+            years_obs = years.value_counts()
+            years_test = years_obs[years_obs > min_obs].index
+
+            # hp_tuned_vals = self.hyper_tune(lead_time=lead_time, model=model, selected_features=used_predictors)
+
+            for y,year in enumerate(years_test.values):
+                year_ind = np.where(years==year)[0]
+                file_train = file.iloc[~year_ind,:]
+                file_test = file.iloc[year_ind,:]
+
+                X_train, X_test = file_train.loc[:,used_predictors], file_test.loc[:,used_predictors]
+                y_train, y_test = file_train.loc[:,'yield'], file_test.loc[:,'yield']
+
+                estimator = self.get_default_regressions(model)
+                hp_tuned_vals = {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.3, 'colsample_bytree': 0.5}
+                estimator.set_params(**hp_tuned_vals)
+                pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+                pipe.fit(X_train, y_train)
+                y_test_pred = pipe.predict(X_test)
+                y_train_pred = pipe.predict(X_train)
+                if l==0:
+                    dict = {'year': [year]*len(y_test),
+                            'observed': y_test,
+                            f'forecast_LT_{lead_time}': y_test_pred
+                            }
+
+                    df = pd.DataFrame(dict)
+                    results = pd.concat([results, df])
+                else:
+                    results.loc[X_test.index,f'forecast_LT_{lead_time}'] = y_test_pred
+
+        results.to_csv(f'Results/forecasts/{self.crop}_{model}_loocv.csv')
 
     def rundeepcast(self, lead_time):
         pass
@@ -318,35 +372,84 @@ class ml:
 
     #--------------------------------------------- Run and evaluate models -------------------------------------------
     def write_results(self):
-        cols = ['lead_time', 's1', 's2', 'all']
+        cols = ['lead_time', 'default_run', 'FE', 'HPT', 'FE&HPT']
         if self.temp_res=='2W':
             lead_times = [8, 7, 6, 5, 4, 3, 2, 1]
         elif self.temp_res=='M':
             lead_times = [4, 3, 2, 1]
         csv_file = pd.DataFrame(data=None, index=lead_times, columns=cols)
         csv_file.loc[:, 'lead_time'] = lead_times
-        for lead_time in lead_times:
-            for pred in cols[1:]:
-                csv_file.loc[lead_time, pred] = self.runforecast(lead_time=lead_time, predictors=pred, merge_months=False)
-        csv_file.to_pickle(f'Results/Validation/s1_vs_s2_{self.temp_res}_unmerged.csv')
+        for lt,lead_time in enumerate(lead_times):
+            csv_file.iloc[lt, 1:] = self.runforecast(lead_time=lead_time, model='XGB', feature_select=True, hyper_tune=True)
+        csv_file.to_pickle(f'Results/Validation/FE_HPT_{self.temp_res}_unmerged.csv')
 
-    def plot_res(self):
+    def s1_vs_s2(self, model):
+        cols = ['s1', 's2', 'both']
+        if self.temp_res=='2W':
+            lead_times = [8, 7, 6, 5, 4, 3, 2, 1]
+        elif self.temp_res=='M':
+            lead_times = [4, 3, 2, 1]
+        csv_file = pd.DataFrame(data=None, index=lead_times, columns=cols)
+        for lead_time in lead_times:
+            for predictor in cols:
+                X, X_test, y, y_test = self.get_train_test(lead_time=lead_time)
+                if predictor=='s1':
+                    selected_features = [a for a in X.columns if not a.startswith(tuple(['ndvi','evi','ndwi','nmdi']))]
+                elif predictor=='s2':
+                    selected_features = [a for a in X.columns if a.startswith(tuple(['ndvi', 'evi', 'ndwi', 'nmdi']))]
+                else:
+                    selected_features = X.columns
+
+                X, X_test = X.loc[:, selected_features], X_test.loc[:, selected_features]
+                # hp_tuned_vals = self.hyper_tune(lead_time=lead_time, model=model, selected_features=selected_features)
+                hp_tuned_vals = {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.3, 'colsample_bytree': 0.5}
+                estimator = self.get_default_regressions(model)
+                estimator.set_params(**hp_tuned_vals)
+                pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+                print(X.columns)
+                scores_kf_hp = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
+                print(f'train perf for lead_time:{lead_time} R^2: {np.median(scores_kf_hp)}')
+                csv_file.loc[lead_time, predictor] = scores_kf_hp
+        csv_file.to_pickle(f'Results/Validation/{model}_s1_s2_{self.temp_res}_unmerged.csv')
+
+    def plot_res(self, s1vss2=False):
         """
         :return: Plots the results generated by self.write_results to a boxplot comparing the performance of the model
                     using S-1, S-2, and all data
         """
-        file = pd.read_pickle(f'Results/Validation/s1_vs_s2_{self.temp_res}_unmerged.csv')
-        s1 = file.loc[:, ['lead_time', 's1']]
-        s2 = file.loc[:, ['lead_time', 's2']]
-        all = file.loc[:, ['lead_time', 'all']]
-        s1 = s1.rename(columns={'s1': 'perf'})
-        s2 = s2.rename(columns={'s2': 'perf'})
-        all = all.rename(columns={'all': 'perf'})
-        s1.loc[:, 'predictors'] = ['s1'] * len(s1.lead_time)
-        s2.loc[:, 'predictors'] = ['s2'] * len(s2.lead_time)
-        all.loc[:, 'predictors'] = ['all'] * len(all.lead_time)
+        if s1vss2:
+            file = pd.read_pickle('Results/Validation/XGB_s1_s2_M_unmerged.csv')
+            file.loc[:,'lead_time'] = file.index
+            s1 = file.loc[:, ['lead_time', 's1']]
+            s2 = file.loc[:, ['lead_time', 's2']]
+            all = file.loc[:, ['lead_time', 'both']]
+            s1 = s1.rename(columns={'s1': 'perf'})
+            s2 = s2.rename(columns={'s2': 'perf'})
+            all = all.rename(columns={'both': 'perf'})
+            s1.loc[:, 'predictors'] = ['s1'] * len(s1.lead_time)
+            s2.loc[:, 'predictors'] = ['s2'] * len(s2.lead_time)
+            all.loc[:, 'predictors'] = ['both'] * len(all.lead_time)
 
-        final = pd.concat([s1, s2, all])
+            final = pd.concat([s1, s2, all])
+
+        else:
+            file = pd.read_pickle('Results/Validation/FE_HPT_M_unmerged.csv')
+            default_run = file.loc[:, ['lead_time', 'default_run']]
+            FE = file.loc[:, ['lead_time', 'FE']]
+            HPT = file.loc[:, ['lead_time', 'HPT']]
+            FE_HPT = file.loc[:, ['lead_time', 'FE&HPT']]
+            default_run = default_run.rename(columns={'default_run': 'perf'})
+            FE = FE.rename(columns={'FE': 'perf'})
+            HPT = HPT.rename(columns={'HPT': 'perf'})
+            FE_HPT = FE_HPT.rename(columns={'FE&HPT': 'perf'})
+            default_run.loc[:, 'predictors'] = ['default_run'] * len(default_run.lead_time)
+            FE.loc[:, 'predictors'] = ['FE'] * len(FE.lead_time)
+            HPT.loc[:, 'predictors'] = ['HPT'] * len(HPT.lead_time)
+            FE_HPT.loc[:, 'predictors'] = ['FE_HPT'] * len(FE_HPT.lead_time)
+
+            final = pd.concat([default_run, FE, HPT, FE_HPT])
+        print(final)
+        seaborn.set_style('whitegrid')
         s = seaborn.boxplot(data=final.explode('perf'), x='lead_time', y='perf', hue='predictors')
         if self.temp_res=='2W':
             s.set_xticklabels(np.linspace(2, 16, 8))
@@ -354,7 +457,8 @@ class ml:
             s.set_xticklabels(np.linspace(4, 16, 4))
         s.set_xlabel('Lead Time [weeks]')
         s.set_ylabel('explained variance')
-        plt.savefig(f'Figures/ml_validation/performance_wheat_s1_2_{self.temp_res}_unmerged.png', dpi=300)
+        s.set_ylim([0,1])
+        plt.savefig(f'Figures/ml_validation/performance_wheat_s1_s2_{self.temp_res}_unmerged.png', dpi=300)
 
     #--------------------------------------------- Auxiliary functions -----------------------------------------------
     def get_default_regressions(self, regression_names):
@@ -480,7 +584,8 @@ class ml:
 
 
 if __name__ == '__main__':
-    #ToDo: finish feature selection, hypertune, check test/train performance, leave one year out, feature_selection based on crosscors
+    #ToDo: check test/train performance, leave one year out, feature_selection based on crosscors
+    #ToDo Today: L1yOCV, gini, upload data to cloud
     #Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
     pd.set_option('display.max_columns', 15)
     start_pro = datetime.now()
@@ -495,20 +600,29 @@ if __name__ == '__main__':
     #     a.merge_tabs(temp_res='M')
 
     # Forecasting
-    a = ml(crop=crops[1], country='cz', temp_res='M')
-    # a.hyper_tune(lead_time=1)
-    a.runforecast(lead_time=1, feature_select=True)
+    a = ml(crop=crops[2], country='cz', temp_res='M')
+    # a.cross_cor_predictors(preds=['sig40_vh','ndvi'])
+    X, X_test, y, y_test = a.get_train_test(lead_time=1)
+    a.feature_selection(X,y, model='XGB')
+
+
+    # a.write_results()
+    # a.s1_vs_s2(model='XGB')
+    # a.plot_res(s1vss2=True)
+    # a.runforecast_loocv(model='XGB')
+    # for lead_time in [4,3,2,1]:
+    #     a.runforecast(lead_time=lead_time, model='XGB', feature_select=True, hyper_tune=True)
 
 
     # a.write_results()
     # a.plot_res()
     # a.runforecast_loocv(lead_time=1, preds=['sig40_vh','ndvi'])
-    # a.cross_cor_predictors(preds=['sig40_vh','ndvi'])
     # for lead_time in [2,1]:
     #     a = ml()
         # a.runforecast(country='cz',crop=crops[1], lead_time=lead_time)
         # a.rundeepcast(farm='rost',crop=crop[1], lead_time=1)
     print(f'calculation stopped and took {datetime.now() - start_pro}')
+    #ToDo: always merge monthly but starting every two weeks
 
 
     

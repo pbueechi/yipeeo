@@ -222,16 +222,20 @@ def extract_s2(region, year=None, new=True):
     #Error but continues: 76 2022-01-02
     #horod 41 2021-09-02; 477 2018-11-07
     ###
-    for it_num,item in enumerate(items[499:]):
+    print(f"we found {len(items)} items for the given search query")
+    for it_num,item in enumerate(items[:1]):
         print(it_num, item.datetime.date())
         # if (it_num>0) and (item.datetime.date()==prev_date):
         #     print('date already covered')
         #     continue
         # prev_date = item.datetime.date()
         signed_item = planetary_computer.sign(item)
-        for band in bands:
+        print(signed_item)
+        print(signed_item.assets)
+        for band in bands[:1]:
             #Load S2 scenes
             src = rasterio.open(signed_item.assets[band].href)
+            print(src)
             fields = fields.to_crs(src.crs)
 
             #Per scene and band extract and summarize the information per field
@@ -559,7 +563,7 @@ def cleaning_s2(region):
         offset_loc = np.where(time>=pd.to_datetime('2022-01-25', format='%Y-%m-%d'))[0]
         #Establish mask with valid observations. I.e. Scene classification without clouds, snow etc.
         #scl as in https://www.sciencedirect.com/science/article/pii/S0924271623002654
-        ok_scene_class = [4, 5, 6, 11]
+        ok_scene_class = [4, 5, 6]
         a_mask = np.in1d(scl, ok_scene_class)
 
         #Load all bands, mask them with scl mask and remove outliers
@@ -580,21 +584,15 @@ def cleaning_s2(region):
         ds.to_netcdf(os.path.join(path_out, field))
 
 
-
-
-def ecostress():
-    pass
-
-
 if __name__ == '__main__':
     # pd.set_option('display.max_rows', None)
     warnings.filterwarnings('ignore')
     start_pro = datetime.now()
     # print('started calculating...')
     # plot_s2_class(region='czr')
-    # extract_s2(region='czr', new=False)
+    extract_s2(region='czr', new=False)
     # cleaning_s2(region='czr')
-    plot_s2_ex(region='ukr_lviv')
+    # plot_s2_ex(region='ukr_lviv')
 
     # for region in ['ukr_lviv']:
     #     print(region)

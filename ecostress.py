@@ -17,6 +17,7 @@ import xarray as xr
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 from pystac.extensions.eo import EOExtension as eo
+from matplotlib import pyplot as plt
 from scipy import stats as st
 from pystac_client import Client
 from pyresample import geometry as geom
@@ -298,7 +299,7 @@ class ecostress:
         band = bands[0]
 
         # Load first file to get all fields names
-        file_path = os.path.join(self.table_path, self.region, f"{band}_all_run.csv")
+        file_path = os.path.join(self.table_path, self.region, f"{band}_all_run_dd.csv")
         file = pd.read_csv(file_path, index_col=0)
         fields = file.columns[1:]
 
@@ -315,10 +316,10 @@ class ecostress:
                     f'There are fields with no pixels of S-2 L2A data inside. These are the fields:{fields[nan_fields].values}')
 
         # Loop through all fields to establish one nc field per field with all bands
-        for f, field in enumerate(fields[:1]):
+        for f, field in enumerate(fields):
             # loop through all bands to collect information of all bands per field
             for b, band in enumerate(bands):
-                file_path = os.path.join(self.table_path, self.region, f"{band}_all_run.csv")
+                file_path = os.path.join(self.table_path, self.region, f"{band}_all_run_dd.csv")
                 file = pd.read_csv(file_path, index_col=0)
                 file.iloc[:, 1:] = file.iloc[:, 1:].round()
 
@@ -341,15 +342,20 @@ class ecostress:
 
                 # Establish pandas series with sentinel-2 data as loaded in the file and merge it with the target series
                 dates = [datetime.datetime.strptime(a.split('_')[0], '%Y-%m-%d') for a in med_f.index]
-                med_field = pd.Series(data=med_f.iloc[:, f + 2].values, index=dates)
-                std_field = pd.Series(data=std_f.iloc[:, f + 2].values, index=dates)
+                med_field = pd.Series(data=med_f.iloc[:, f + 1].values, index=dates)
+                std_field = pd.Series(data=std_f.iloc[:, f + 1].values, index=dates)
 
                 # resample to daily values for cases where there are several observations per day
-                med_field = med_field.resample('D').mean()
                 std_field = std_field.resample('D').mean()
-
+                if band == 'ECO2CLD':
+                    med_field = med_field.resample('D').max()
+                else:
+                    med_field = med_field.resample('D').mean()
+                    med_field = med_field.where(med_field < 310)
+                    med_field = med_field.where(med_field > 260)
                 _, med_daily = target_var.align(med_field, axis=0)
                 _, std_daily = target_var.align(std_field, axis=0)
+
                 med_daily = med_daily.replace(np.nan, -9999)
                 std_daily = std_daily.replace(np.nan, -9999)
 
@@ -381,6 +387,13 @@ class ecostress:
             # comp = dict(zlib=True, complevel=9)
             # encoding = {var: comp for var in xr_file.data_vars}
             xr_file.to_netcdf(os.path.join(self.table_path, self.region,'nc', f'{field}.nc'))
+
+    def post_process(self):
+        for collection in self.__class__.collections:
+            file = pd.read_csv(os.path.join(self.table_path, self.region, f'{collection}_all_run.csv'))
+            day_time = np.array([int(a.split(':')[0]) for a in file.day_time])
+            day_ind = np.where((day_time>11) & (day_time<18))[0]
+            file.iloc[day_ind,:].to_csv(os.path.join(self.table_path, self.region, f'{collection}_all_run_dd.csv'), index=0)
 
 
 def eco2tif(path_lst, path_geo, path_out, uncertainty=False, core=1):
@@ -527,13 +540,144 @@ def eco2tif(path_lst, path_geo, path_out, uncertainty=False, core=1):
 
     return sf, add_off, outName
 
+def plot_ecostress(region):
+    """
+    :return: Plots the data of Sentinel-2 band 2 for checking the impact of scene classification masking
+    """
+    path = rf'D:\data-write\YIPEEO\predictors\ECOSTRESS\ts\{region}\nc'
+    fields = os.listdir(path)
+    fields = [field for field in fields if field.endswith('.nc')]
+
+    #Load required data
+    ds = xr.open_dataset(os.path.join(path, fields[1]))
+    cc = ds.ECO2CLD_mod.values
+    lst = ds.ECO2LSTE_median.values
+    lst_err = ds.ECO2LSTE_std.values
+    time = ds.time.values
+
+    time = time[lst>-9999]
+    cc = cc[lst>-9999]
+    cc_bin = [int(bin(int(d))[-2]) if d>1 else 0 for d in cc]
+    lst_err = lst_err[lst > -9999]
+    lst = lst[lst>-9999]
+
+    a = pd.DataFrame(columns=['cc', 'lst', 'lst_err'], index=time)
+    a.loc[:, 'cc'] = cc_bin
+    a.loc[:, 'lst'] = lst
+    a.loc[:, 'lst_err'] = lst_err
+    print(a.shape)
+    # print(a.tail(50))
+
+    #plotting
+    # plt.plot(a.index, a.lst-273)
+    # plt.plot(a.index, a.cc)
+    # plt.legend(['LST','cloud cover'])
+    # plt.xticks(rotation=45)
+    # plt.subplots_adjust(bottom=0.15)
+    # # plt.show()
+    # plt.savefig('Figures/ecostress_ex.png', dpi=300)
+
+def plot_ecostress_orig(region, both=False):
+    """
+    :return: Plots the data of Sentinel-2 band 2 for checking the impact of scene classification masking
+    """
+    f = 1
+    file_path = fr'D:\data-write\YIPEEO\predictors\ECOSTRESS\ts\{region}\ECO2LSTE_all_run.csv'
+    file = pd.read_csv(file_path, index_col=0)
+    file.iloc[:, 1:] = file.iloc[:, 1:].round()
+
+    # Split file into median and std
+    med_f = file.iloc[::2, :]
+    std_f = file.iloc[1::2, :]
+    # Remove rows with only nan
+    nan_fields = med_f.iloc[:, 1:].isna().all(axis=1)
+    med_f = med_f[~nan_fields.values]
+    std_f = std_f[~nan_fields.values]
+
+    # check if there are only std values in the std_f file
+    char = [a.split('_')[1] for a in std_f.index]
+    if not char[1:] == char[:-1]:
+        raise ValueError('There are not only std values in the std file')
+
+    # Establish a pandas Series as target variable with daily timestep from 2019 to 2022
+    dates_all = pd.date_range(start='1/1/2019', end='31/12/2022')
+    target_var = pd.Series(data=None, index=dates_all)
+
+    # Establish pandas series with sentinel-2 data as loaded in the file and merge it with the target series
+    dates = [datetime.datetime.strptime(a.split('_')[0], '%Y-%m-%d') for a in med_f.index]
+    med_field = pd.Series(data=med_f.iloc[:, f + 1].values, index=dates)
+    std_field = pd.Series(data=std_f.iloc[:, f + 1].values, index=dates)
+
+    # resample to daily values for cases where there are several observations per day
+    std_field = std_field.resample('D').mean()
+    med_field = med_field.resample('D').mean()
+    # med_field = med_field.where(med_field < 310)
+    med_field = med_field.where(med_field > 10)
+    _, med_daily = target_var.align(med_field, axis=0)
+    _, std_daily = target_var.align(std_field, axis=0)
+
+    if both:
+        path = rf'D:\data-write\YIPEEO\predictors\ECOSTRESS\ts\{region}\nc'
+        fields = os.listdir(path)
+        fields = [field for field in fields if field.endswith('.nc')]
+
+        # Load required data
+        ds = xr.open_dataset(os.path.join(path, fields[1]))
+        cc = ds.ECO2CLD_mod.values
+        lst = ds.ECO2LSTE_median.values
+        lst_err = ds.ECO2LSTE_std.values
+        time = ds.time.values
+
+        time = time[lst > -9999]
+        cc = cc[lst > -9999]
+        cc_bin = [int(bin(int(d))[-3]) if d>3 else 0 for d in cc]
+        lst_err = lst_err[lst > -9999]
+        lst = lst[lst > -9999]
+
+        a = pd.DataFrame(columns=['cc', 'lst', 'lst_err'], index=time)
+        a.loc[:, 'cc'] = cc_bin
+        a.loc[:, 'lst'] = lst
+        a.loc[:, 'lst_err'] = lst_err
+
+        # plotting
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        fig.set_size_inches(10,5)
+        ax1.plot(med_daily-273)
+        ax1.set_xticks(ax1.get_xticks(), ax1.get_xticklabels(), rotation=45)
+        ax1.set_title('Original data')
+        ax1.set_ylabel('Temperature [°C]')
+
+        ax2.plot(a.index, a.lst - 273)
+        ax2.plot(a.index, a.cc)
+        ax2.legend(['LST', 'cloud cover'])
+        ax2.set_xticks(ax2.get_xticks(), ax2.get_xticklabels(), rotation=45)
+        ax2.set_title('Preprocessed data')
+        ax2.set_ylabel('Temperature [°C]')
+
+        plt.subplots_adjust(bottom=0.15)
+        # plt.show()
+        plt.savefig('Figures/ecostress_comp_flag2.png', dpi=300)
+
+
+    else:
+        #plotting
+        plt.plot(med_daily-273)
+        # plt.plot(a.index, a.cc)
+        # plt.legend(['LST','cloud cover'])
+        plt.xticks(rotation=45)
+        plt.subplots_adjust(bottom=0.15)
+        plt.show()
+        # plt.savefig('Figures/ecostress_orig.png', dpi=300)
 
 if __name__=='__main__':
     warnings.filterwarnings('ignore')
     print(datetime.datetime.now())
-    a = ecostress(region='czr')
-    a.merge_files()
+    # plot_ecostress('czr')
+    plot_ecostress_orig('czr', both=True)
+    # a = ecostress(region='czr')
     # a.run_leftovers(n_cores=2)
+    # a.merge_files()
+    # a.post_process()
     # a.table2nc()
     # a.run(n_cores=20, new=False)
     print('finished at: ',datetime.datetime.now())

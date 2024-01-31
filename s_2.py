@@ -26,7 +26,6 @@ def plot_s2_class(region, year=None):
     :param region: str of region where fields are located which will be extract from S-2 L2A data. So far available: czr, nl, rom, ukr_chmel, ukr_horod, ukr_lviv
     :return: dataframe of S2 observations per field
     """
-    # ToDo adjust that all fields can be loaded at the same time and loop through the farms by selecting by attribute farm_code
     print('started calculating...')
 
     # Load fields and remove identical fields
@@ -223,7 +222,7 @@ def extract_s2(region, year=None, new=True):
     #horod 41 2021-09-02; 477 2018-11-07
     ###
     print(f"we found {len(items)} items for the given search query")
-    for it_num,item in enumerate(items[:1]):
+    for it_num,item in enumerate(items):
         print(it_num, item.datetime.date())
         # if (it_num>0) and (item.datetime.date()==prev_date):
         #     print('date already covered')
@@ -232,10 +231,9 @@ def extract_s2(region, year=None, new=True):
         signed_item = planetary_computer.sign(item)
         print(signed_item)
         print(signed_item.assets)
-        for band in bands[:1]:
+        for band in bands:
             #Load S2 scenes
             src = rasterio.open(signed_item.assets[band].href)
-            print(src)
             fields = fields.to_crs(src.crs)
 
             #Per scene and band extract and summarize the information per field
@@ -272,14 +270,6 @@ def extract_s2(region, year=None, new=True):
                 writer.writerow(list(fields_data.iloc[1,:]))
 
             gc.collect()
-
-#ToDo finish parallelisation of extract_s2
-def parallel_run(path):
-    # years = [2016,2017,2018,2019,2020,2021,2022]
-    years = [2016, 2017, 2018]
-    with ProcessPoolExecutor(max_workers=mp.cpu_count()) as pool:
-        for year in years:
-            pool.submit(parallel_run, field_shape_path=path, years=year)
 
 def table2nc(region):
     """
@@ -483,14 +473,14 @@ def plot_s2_ex(region):
     """
     :return: Plots the data of Sentinel-2 band 2 for checking the impact of scene classification masking
     """
-    path = rf'D:\data-write\YIPEEO\predictors\S2_L2A\ts\{region}\nc\cleaned\new'
+    path = rf'D:\data-write\YIPEEO\predictors\S2_L2A\ts\{region}\nc'
     fields = os.listdir(path)
     fields = [field for field in fields if field.endswith('.nc')]
     print(fields)
     #Load required data
-    ds = xr.open_dataset(os.path.join(path, fields[0]))
+    ds = xr.open_dataset(os.path.join(path, fields[5]))
     cc = ds.cloud_cover.values
-    b2 = ds.evi.values
+    b2 = ds.B02_median.values
     scl = ds.SCL_mode.values
     time = ds.time.values
 
@@ -505,25 +495,24 @@ def plot_s2_ex(region):
     a.loc[:, 'scl'] = scl
     # print(a.head(50))
 
-    ok_scene_class = [4, 5, 6, 11]  # scl as in https://www.sciencedirect.com/science/article/pii/S0924271623002654
+    ok_scene_class = [4, 5, 6]  # scl as in https://www.sciencedirect.com/science/article/pii/S0924271623002654
     a_mask = np.in1d(a.scl, ok_scene_class)
     a_masked = a.iloc[a_mask, :]
 
     #Sentinel-2 processing changed on 2022-01-25 introducing an offset of 1000
     #https://github.com/stactools-packages/sentinel2/issues/44
-    # offset_loc = np.where(a_masked.index>='2022-01-25')[0]
-    # a_masked.iloc[offset_loc,0] = a_masked.iloc[offset_loc,0]-1000
+    offset_loc = np.where(a_masked.index>='2022-01-25')[0]
+    a_masked.iloc[offset_loc,0] = a_masked.iloc[offset_loc,0]-1000
 
     #plotting
-    plt.plot(a.index, a.b2)
-    # plt.plot(a_masked.index, a_masked.b2)
-    # plt.plot(a_masked.index, removeOutliers(a_masked.b2))
-    # plt.legend(['all_s2_data','2022 adjusted','clean data'])
+    plt.plot(a.index, a.b2/10000)
+    plt.plot(a_masked.index, a_masked.b2/10000)
+    plt.plot(a_masked.index, removeOutliers(a_masked.b2)/10000)
+    plt.legend(['all_s2_data','2022 adjusted','clean data'])
     plt.xticks(rotation=45)
     plt.subplots_adjust(bottom=0.15)
-    plt.show()
-    # plt.savefig('Figures/cloud_masking_impact_clean_2016.png', dpi=300)
-    #ToDo check if higher values in 2022 occur everywhere
+    # plt.show()
+    plt.savefig('Figures/cloud_masking_impact_clean_2016_5czr.png', dpi=300)
 
 def removeOutliers(x, outlierConstant=2):
     a = np.array(x)
@@ -590,16 +579,16 @@ if __name__ == '__main__':
     start_pro = datetime.now()
     # print('started calculating...')
     # plot_s2_class(region='czr')
-    extract_s2(region='czr', new=False)
+    # extract_s2(region='polk', new=False)
     # cleaning_s2(region='czr')
-    # plot_s2_ex(region='ukr_lviv')
+    # plot_s2_ex(region='czr')
 
-    # for region in ['ukr_lviv']:
+    for region in ['polk']:
     #     print(region)
-        # extract_s2(region=region, new=False)
-        # table2nc(region=region)
-        # cleaning_s2(region=region)
-        # add_indices2nc(file_path=rf'D:\data-write\YIPEEO\predictors\S2_L2A\ts\{region}\nc\cleaned')
+    #     extract_s2(region=region, new=False)
+        table2nc(region=region)
+        cleaning_s2(region=region)
+        add_indices2nc(file_path=rf'D:\data-write\YIPEEO\predictors\S2_L2A\ts\{region}\nc\cleaned')
     # ecostress()
     print(f'calculation stopped and took {datetime.now() - start_pro}')
     # parallel_run(path=field_shape_path)

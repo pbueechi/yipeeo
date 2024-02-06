@@ -503,8 +503,8 @@ class ml:
             results.to_csv(f'Results/forecasts/{self.country}_{self.crop}_{model}_loocv_opt={optimize}.csv')
 
     def runforecast_country(self, model='RF', optimize=False):
-        file_train = pd.read_csv('Data/M/cz/rost_common winter wheat_all.csv', index_col=0)
-        file_test = pd.read_csv(f'Data/M/{self.country}/polk_common winter wheat_all.csv', index_col=0)
+        file_train = pd.read_csv(f'Data/M/cz/rost_{self.crop}_all.csv', index_col=0)
+        file_test = pd.read_csv(f'Data/M/{self.country}/polk_{self.crop}_all.csv', index_col=0)
         file_train = file_train.dropna(axis=0)
         file_test = file_test.dropna(axis=0)
         predictors = [p for p in file_train.columns[3:] if not p == 'date_last_obs']
@@ -672,6 +672,7 @@ class ml:
 
         elif comp=='s1s2':
             file = pd.read_pickle(f'Results/Validation/{self.crop}_XGB_s1_s2_{self.temp_res}_unmerged.csv')
+            # file = pd.read_pickle(f'Results/Validation/s1_vs_s2.csv')
             file.loc[:,'lead_time'] = file.index
             s1 = file.loc[:, ['lead_time', 's1']]
             s2 = file.loc[:, ['lead_time', 's2']]
@@ -703,28 +704,26 @@ class ml:
             final = pd.concat([default_run, FE, HPT, FE_HPT])
 
         seaborn.set_style('whitegrid')
-        s = seaborn.boxplot(data=final.explode('perf'), x='lead_time', y='perf', hue='predictors')
+        s = seaborn.boxplot(data=final.explode('perf'), x='lead_time', y='perf', hue='predictors', zorder=2)
         if self.temp_res=='2W':
             s.set_xticklabels(np.linspace(2, 16, 8))
         elif self.temp_res=='M':
-            s.set_xticklabels(np.linspace(4, 16, 4))
-        s.set_xlabel('Lead Time [weeks]')
+            s.set_xticklabels(np.linspace(1, 4, 4))
+        s.set_xlabel('Lead Time [months]')
         s.set_ylabel('explained variance')
         s.set_title(self.crop)
         s.set_ylim([-2,1])
-
-        ax = s.axes.flatten()[0]
-        ax.set_yscale('log')
-        ax.yaxis.set_minor_locator(matplotlib.ticker.LogLocator(base=10.0, subs='all'))
-        ax.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
-
-        plt.grid(True, which="both", ls="--", c='gray')
-
-        # s.grid(which='minor', color='black', linewidth=0.75, b=True)
-        # s.grid(b=True, which='minor', color='k', linestyle='-', linewidth=0.2)
-
-        plt.show()
-        # plt.savefig(f'Figures/ml_validation/{comp}_{self.crop}_{self.temp_res}-2.png', dpi=300)
+        lw=0.5
+        lin_col = 'gray'
+        alpha = 0.5
+        s.legend_.set_title(None)
+        [s.axhline(x + .1, color=lin_col, linewidth=lw, alpha=alpha, zorder=1) for x in s.get_yticks()]
+        [s.axhline(x + .2, color=lin_col, linewidth=lw, alpha=alpha, zorder=1) for x in s.get_yticks()]
+        [s.axhline(x + .3, color=lin_col, linewidth=lw, alpha=alpha, zorder=1) for x in s.get_yticks()]
+        [s.axhline(x + .4, color=lin_col, linewidth=lw, alpha=alpha, zorder=1) for x in s.get_yticks()]
+        [s.axhline(x, color='k', linewidth=lw, zorder=1) for x in s.get_yticks()]
+        # plt.show()
+        plt.savefig(fr'M:\Projects\YIPEEO\04_deliverables_documents\03_ATBD\Figs\ml_validation/{comp}_{self.crop}_{self.temp_res}-2.png', dpi=300)
         plt.close()
 
 
@@ -888,10 +887,10 @@ if __name__ == '__main__':
 
 
     # Forecasting
-    # for crop in crops[1:2]:
-        # a = ml(crop=crop, country='cz', farm='rost', temp_res='M')
+    for crop in crops[:1]:
+        a = ml(crop=crop, country='cz', farm='rost', temp_res='2W')
         # a.s1_vs_s2()
-        # a.plot_res(comp='s1s2')
+        a.plot_res(comp='s1s2')
         # a.s1_vs_s2()
         # a.cross_cor_predictors(lt=1)
     #     a.feature_imp(lead_time=1)

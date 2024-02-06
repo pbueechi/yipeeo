@@ -5,9 +5,45 @@ import pandas as pd
 import geopandas as gpd
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
-from datetime import datetime
+import matplotlib.gridspec as gridspec
+from pysal.lib import weights
+from PIL import Image
+from cmcrameri import cm as cmr
+from scipy.stats import pearsonr, spearmanr
 
+class Moron:
+    def __init__(self, y,w, permutations=99):
+        self.y = y
+        self.w = w
+        sy = y.std()
+        # self.z /= sy
+        # print(self.z)
+        self.n = len(self.y)
+        self.z = y - y.mean()
+        self.z /= sy
+        self.ind = self.z.index
+        self.z2ss = (self.z*self.z).sum()
+        self.permutations = permutations
+        self.I = self.calc(self.z)
 
+    def calc(self, z=None):
+        if z is not None:
+            zl = [z.loc[self.w.neighbors[ind]].mean() for ind in self.ind]
+            inum = (z * zl).sum()
+        else:
+            zl = [self.z.loc[self.w.neighbors[ind]].mean() for ind in self.ind]
+            inum = (self.z * zl).sum()
+        return self.n / self.w.s0 * inum / self.z2ss
+
+    def calc_p(self):
+        sim = [self.calc(np.random.permutation(self.z)) for i in range(self.permutations)]
+        self.sim = sim = np.array(sim)
+        above = sim >= self.I
+        larger = above.sum()
+        if (self.permutations - larger) < larger:
+            larger = self.permutations - larger
+        p_sim = (larger + 1.0) / (self.permutations + 1.0)
+        return p_sim
 
 def crop_summary_stats():
     path = r'D:\DATA\yipeeo\Crop_data\Crop_yield\all\field_scale_rest.shp'
@@ -50,17 +86,84 @@ def plot_crop_summary():
 
     plt.savefig('Results/explore_data/barplot_crops_50.png', dpi=300)
 
-def plot_crop_year(crop):
-    file = pd.read_csv(f'Data/M/cz/rost_{crop}_all.csv', index_col=0)
-    seaborn.boxplot(data=file, y="yield", x="c_year")
+def plot_crop_year():
+    file = pd.read_csv('Data/M/cz/rost_all_crops.csv', decimal=',')
+
+    seaborn.set_style('whitegrid')
+    s = seaborn.boxplot(data=file.explode('yield'), x='c_year', y='yield', hue='crop_short')
+    s.set_xlabel('Year')
+    s.set_ylabel('Yield [t/ha]')
+    [s.axvline(x + .5, color='k') for x in s.get_xticks()]
+    s.legend_.set_title(None)
+    plt.show()
+    # plt.savefig(r'M:\Projects\YIPEEO\04_deliverables_documents\03_PVR\Figures\crop_hist.png', dpi=300)
+
+def ml_char_plot():
+    file = pd.read_csv('Data/M/common winter wheat_all.csv', decimal=',')
+
+    # seaborn.set_style('whitegrid')
+    seaborn.displot(file, x="yield", hue="region", kind="kde", fill=True)
+    plt.title('Winter wheat')
+    plt.subplots_adjust(top=0.95)
+    plt.xlabel('Yield [t/ha]')
+    # seaborn.set_style('whitegrid')
+    # seaborn.jointplot(data=file, x="ndvi_LT2", y='sig40_cr_mean_daily_LT2', hue="region", kind="kde")
+
+    # plt.show()
+    plt.savefig(r'M:\Projects\YIPEEO\04_deliverables_documents\03_PVR\Figures\yield_density.png', dpi=300)
+
+def merge_plots():
+    # Read the two images
+    image1 = Image.open(r'M:\Projects\YIPEEO\04_deliverables_documents\03_PVR\Figures\yield_density.png')
+    image2 = Image.open(r'M:\Projects\YIPEEO\04_deliverables_documents\03_PVR\Figures\pred_density.png')
+    # resize, first image
+    # image1 = image1.resize((426, 240))
+    image1_size = image1.size
+    image2 = image2.resize(image1_size)
+    new_image = Image.new('RGB', (2 * image1_size[0], image1_size[1]), (250, 250, 250))
+    new_image.paste(image1, (0, 0))
+    new_image.paste(image2, (image1_size[0], 0))
+    new_image.save(r'M:\Projects\YIPEEO\04_deliverables_documents\03_PVR\Figures\merged_image.png', "PNG")
+    # new_image.show()
+
+def morans(crop):
+    path = rf'D:\DATA\yipeeo\Crop_data\Crop_yield\all\field_scale_rost.shp'
+    fields = gpd.read_file(path)
+    # ToDo: filter data per crop
+    fields.index = fields.field_id
+    mors = []
+    years = np.unique(fields.c_year)
+    for year in years[:1]:
+        fields_year = fields.iloc[np.where(fields.c_year==year)[0],:]
+        w = weights.Queen.from_dataframe(fields_year, idVariable='field_id')
+        w.transform = 'R'
+        y = fields_year['yield']
+        a = Moron(y, w)
+        mors.append(a.calc())
+        print(f'Spatial autocorrelation of {crop} in {year}: {a.calc()} Morans I')
+    return mors
+
+def yearly_val():
+    crops = ['common winter wheat', 'grain maize and corn-cob-mix', 'spring barley']
+
+    fig = plt.figure(figsize=(8, 4))
+    outer = gridspec.GridSpec(3, 4, height_ratios=[0.45,0.45,0.1])
+    ax1 = plt.Subplot(fig, outer[0])
+
+    path = f'Results/forecasts/cz_{crops[1]}_XGB_loocv_opt=True.csv'
+    file = pd.read_csv(path, index_col=0)
+    seaborn.set_style('whitegrid')
+    s = seaborn.scatterplot(ax=ax1,data=file.explode('observed'), x='observed', y='forecast_LT_2', hue='year', palette=cmr.berlin)
+    s.set_xlabel('Observed yield [t/ha]')
+    s.set_ylabel('Forecasted yield LT1 [t/ha]')
+    # [s.axvline(x + .5, color='k') for x in s.get_xticks()]
+    corr = pearsonr(file.observed, file.forecast_LT_2)[0]
+    s.legend_.set_title(f'pearson R: {np.round(corr,2)}')
+    fig.add_subplot(ax1)
     plt.show()
 
 
 if __name__ == '__main__':
     pd.set_option('display.max_columns', 15)
     warnings.filterwarnings('ignore')
-
-    # Predictors resampling
-    crops = ['common winter wheat','grain maize and corn-cob-mix','spring barley']
-    for crop in crops[2:]:
-        plot_crop_year(crop)
+    merge_plots()

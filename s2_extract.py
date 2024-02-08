@@ -10,13 +10,8 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import multiprocessing as mp
-import matplotlib.gridspec as gridspec
 import xarray as xr
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from scipy import stats as st
-from pyproj import Proj, transform
-from PIL import Image
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from rasterio.mask import mask
@@ -28,10 +23,14 @@ class s2:
     """
     bands = ['B02','B03','B04','B05','B06','B07','B08','B8A','B11','B12','SCL']
     def __init__(self, region):
+        """
+        :param region: str of name of location. For the example dataset rost must be used. For NUTS3 level different name can be used
+        """
         self.region = region
+        #ToDo Replace the two following links with where theoutput should be stored and the link to the shapefile with the fields
         self.table_path = '/home/pbueechi/thinclient_drives/D:/data-write/YIPEEO/predictors/S2_L2A/ts'
-        self.csv_path = os.path.join(self.table_path, region)
         self.fields = gpd.read_file(f'/home/pbueechi/thinclient_drives/D:/DATA/yipeeo/Crop_data/Crop_yield/all/field_scale_{region}.shp')
+        self.csv_path = os.path.join(self.table_path, region)
         self.fields = self.fields.drop_duplicates(subset='field_id')
         self.row_head = ['observation', 'cloud_cover[%]'] + list(self.fields.field_id.values)
 
@@ -152,8 +151,7 @@ class s2:
     def run_extraction(self, n_cores=4, new=False):
         if new:
             self.createcsv(n_cores=n_cores)
-        search_s2 = self.find_s2_items()[:12]
-        print(search_s2)
+        search_s2 = self.find_s2_items()[:50]
         with ProcessPoolExecutor(max_workers=mp.cpu_count()) as pool:
             for i in range(n_cores):
                 chunks = int(len(search_s2) / n_cores)
@@ -176,7 +174,6 @@ class s2:
 
     def table2nc(self):
         """
-        :param region: str of region where fields are located which will be extract from S-2 L2A data. So far available: czr, nl, rom, ukr_chmel, ukr_horod, ukr_lviv
         :return:combines all csv files with the data of the individual S-2 L2A Bands to one netcdf file
         """
 
@@ -439,10 +436,10 @@ if __name__ == '__main__':
     start_pro = datetime.now()
 
     a = s2(region='rost')
-    # a.run_extraction(n_cores=4, new=True)
-    # a.merge_files()
-    # a.table2nc()
-    # a.cleaning_s2()
+    a.run_extraction(n_cores=10, new=True)
+    a.merge_files()
+    a.table2nc()
+    a.cleaning_s2()
     a.add_indices2nc()
 
     print(f'calculation stopped and took {datetime.now() - start_pro}')

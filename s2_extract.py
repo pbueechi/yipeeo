@@ -151,7 +151,7 @@ class s2:
     def run_extraction(self, n_cores=4, new=False):
         if new:
             self.createcsv(n_cores=n_cores)
-        search_s2 = self.find_s2_items()[:50]
+        search_s2 = self.find_s2_items()
         with ProcessPoolExecutor(max_workers=mp.cpu_count()) as pool:
             for i in range(n_cores):
                 chunks = int(len(search_s2) / n_cores)

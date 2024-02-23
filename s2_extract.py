@@ -468,7 +468,7 @@ if __name__ == '__main__':
     start_pro = datetime.now()
     print(start_pro)
     # test()
-    year = 2022
+    year = 2020
     a = s2(region='Austria', year=year, crop='maize')
     a.run_extraction(n_cores=1, new=False)
     # a.merge_files()

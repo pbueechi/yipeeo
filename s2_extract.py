@@ -460,13 +460,12 @@ if __name__ == '__main__':
     warnings.filterwarnings('ignore')
     start_pro = datetime.now()
     print(start_pro)
-    # test()
     for year in range(2016,2023):
         a = s2(region='Austria', year=year, crop='maize')
         a.run_extraction(n_cores=1, new=False)
-    # a.merge_files()
-    # a.table2nc()
-    # a.cleaning_s2()
-    # a.add_indices2nc()
+        # a.merge_files()
+        # a.table2nc()
+        # a.cleaning_s2()
+        # a.add_indices2nc()
 
     print(f'calculation stopped and took {datetime.now() - start_pro}')

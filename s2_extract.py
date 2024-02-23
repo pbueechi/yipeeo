@@ -456,21 +456,14 @@ def removeOutliers(x, outlierConstant=2):
     a = np.where(((a>=quartileSet[0]) & (a<=quartileSet[1])),a,np.nan)
     return a
 
-def test():
-    a = s2(region='Austria', year=2016, crop='maize')
-    search_s2 = a.find_s2_items()[:4]
-    a.createcsv()
-    a.extract_s2(search_s2)
-
-
 if __name__ == '__main__':
     warnings.filterwarnings('ignore')
     start_pro = datetime.now()
     print(start_pro)
     # test()
-    year = 2020
-    a = s2(region='Austria', year=year, crop='maize')
-    a.run_extraction(n_cores=1, new=False)
+    for year in range(2016,2023):
+        a = s2(region='Austria', year=year, crop='maize')
+        a.run_extraction(n_cores=1, new=False)
     # a.merge_files()
     # a.table2nc()
     # a.cleaning_s2()

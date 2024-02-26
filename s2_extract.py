@@ -115,7 +115,14 @@ class s2:
         }
 
         # Set considered time and bands that should be extracted. So far set to visual, vegetation red edge, NIR and SWIR
-        time_of_interest = f'{self.year}-05-01/{self.year}-10-31'
+        # ToDo: to save computation time, I only extracted the last four months before harvest. However, if its fast enough,
+        # we should extract it starting in January
+        # Maize efficient version
+        # time_of_interest = f'{self.year}-05-01/{self.year}-10-31'
+        # wheat, spring barley efficient version
+        # time_of_interest = f'{self.year}-02-01/{self.year}-07-31'
+        # All year except for Nov and Dec
+        time_of_interest = f'{self.year}-01-01/{self.year}-10-31'
 
         # Setup connections to planetary computer and search for available S-2 images
         catalog = pystac_client.Client.open(

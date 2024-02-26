@@ -182,10 +182,9 @@ class s2:
                 if end > len(search_s2):
                     end = len(search_s2)
                 this_search_s2 = search_s2[start:end]
-                pool.submit(self.extract_s2, items=this_search_s2, core=i)
+                # pool.submit(self.extract_s2, items=this_search_s2, core=i)
                 # Non-parallel computing use the following
-                # self.extract_s2(items=this_search_s2, core=None)
-
+                self.extract_s2(items=this_search_s2, core=None)
 
     def merge_files(self):
         """
@@ -196,7 +195,18 @@ class s2:
             files = os.path.join(self.csv_path, f"run_{collection}*.csv")
             files = glob.glob(files)
             df = pd.concat(map(pd.read_csv, files), ignore_index=True)
-            df.to_csv(os.path.join(self.csv_path, f"{collection}_all_run.csv"), index=0)
+            df.to_csv(os.path.join(self.csv_path, f"run_{collection}_all.csv"), index=0)
+
+    def clean_csv(self):
+        path = rf'{self.table_path}/{self.region}/{self.crop}'
+        years = os.listdir(path)
+        for year in years:
+            path_new = os.path.join(path, year)
+            bands = [a for a in os.listdir(path_new) if a.endswith('.csv')]
+            for band in bands:
+                file = pd.read_csv(os.path.join(path_new, band), index_col=0)
+                file_new = file.dropna(axis=0, how='all', subset=file.columns[1:])
+                file_new.to_csv(os.path.join(path_new, band), index=True)
 
     def table2nc(self):
         """
@@ -207,13 +217,13 @@ class s2:
         band = self.__class__.bands[0]
 
         #Load first file to get all fields names
-        file_path = os.path.join(self.csv_path, f'{band}_all_run.csv')
+        file_path = os.path.join(self.csv_path, f'run_{band}_all.csv')
         file = pd.read_csv(file_path, index_col=0)
-        fields = file.columns[1:]
+        fields_o = file.columns[1:]
 
         #Filter fields with only nan values
         nan_fields = file.iloc[:,1:].isna().all(axis=0)
-        fields = fields[~nan_fields]
+        fields = fields_o[~nan_fields]
 
         nc_path = os.path.join(self.csv_path, 'nc')
         if not os.path.exists(nc_path):
@@ -221,13 +231,13 @@ class s2:
 
         if np.sum(nan_fields)>0:
             with open(os.path.join(nc_path, 'read_me.txt'), 'w') as file:
-                file.write(f'There are fields with no pixels of S-2 L2A data inside. These are the fields:{fields[nan_fields].values}')
+                file.write(f'There are fields with no pixels of S-2 L2A data inside. These are the fields:{fields_o[nan_fields].values}')
 
         #Loop through all fields to establish one nc field per field with all bands
         for f, field in enumerate(fields):
             #loop through all bands to collect information of all bands per field
             for b,band in enumerate(self.__class__.bands):
-                file_path = os.path.join(self.csv_path, f'{band}_all_run.csv')
+                file_path = os.path.join(self.csv_path, f'run_{band}_all.csv')
                 file = pd.read_csv(file_path, index_col=0)
                 file.iloc[:,1:] = file.iloc[:,1:].round()
 
@@ -460,12 +470,13 @@ if __name__ == '__main__':
     warnings.filterwarnings('ignore')
     start_pro = datetime.now()
     print(start_pro)
-    for year in range(2016,2023):
-        a = s2(region='Austria', year=year, crop='maize')
-        a.run_extraction(n_cores=1, new=False)
-        # a.merge_files()
-        # a.table2nc()
-        # a.cleaning_s2()
-        # a.add_indices2nc()
+    year = 2016
+    a = s2(region='Austria', year=year, crop='maize')
+    # a.run_extraction(n_cores=1, new=False)
+    # a.merge_files()
+    # a.clean_csv()
+    a.table2nc()
+    # a.cleaning_s2()
+    # a.add_indices2nc()
 
     print(f'calculation stopped and took {datetime.now() - start_pro}')

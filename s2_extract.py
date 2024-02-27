@@ -6,6 +6,7 @@ import rasterio
 import csv
 import warnings
 import glob
+import cProfile
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -21,8 +22,11 @@ class s2:
     """
     Class to retrieve ecostress data and extract it to field level
     """
-    # bands = ['B02','B03','B04','B05','B06','B07','B08','B8A','B11','B12','SCL']
-    bands = ['B02','B04','B08','B11','B12','SCL']
+    # ToDo: There are several ways to save some computation time. First, change bands to the second list below.
+    #  Afterwards, self.time_of_interest can be adjusted in def __init__
+    bands = ['B02','B03','B04','B05','B06','B07','B08','B8A','B11','B12','SCL']
+    # bands = ['B02','B04','B08','B11','B12','SCL']
+
     def __init__(self, region, year, crop):
         """
         :param region: str of name of location. For the example dataset rost must be used. For NUTS3 level different name can be used
@@ -38,6 +42,11 @@ class s2:
         if not os.path.exists(self.csv_path): os.makedirs(self.csv_path)
         self.fields = self.fields.drop_duplicates(subset='FS_KENNUNG')
         self.row_head = ['observation', 'cloud_cover[%]'] + [int(i) for i in list(self.fields.FS_KENNUNG.values)]
+        self.time_of_interest = f'{self.year}-01-01/{self.year}-10-31'
+        # Maize efficient version
+        # time_of_interest = f'{self.year}-04-01/{self.year}-10-31'
+        # wheat, spring barley efficient version
+        # time_of_interest = f'{self.year}-01-01/{self.year}-07-31'
 
     def extract_s2(self, items, core=None):
         """
@@ -56,10 +65,8 @@ class s2:
             xmin, ymin, xmax, ymax = exts.min(axis=0).x, exts.min(axis=0).y, exts.max(axis=0).x, exts.max(axis=0).y
             used_fields = self.fields.clip(mask=[xmin, ymin, xmax, ymax])
             for band in self.__class__.bands:
-            #     # Load S2 scenes
+                # Load S2 scenes
                 src = rasterio.open(signed_item.assets[band].href)
-
-
                 fields = used_fields.to_crs(src.crs)
                 # Per scene and band extract and summarize the information per field
                 fields_data = pd.DataFrame(data=None, index=range(2), columns=self.row_head)
@@ -114,15 +121,7 @@ class s2:
             ]],
         }
 
-        # Set considered time and bands that should be extracted. So far set to visual, vegetation red edge, NIR and SWIR
-        # ToDo: to save computation time, I only extracted the last four months before harvest. However, if its fast enough,
-        # we should extract it starting in January
-        # Maize efficient version
-        # time_of_interest = f'{self.year}-05-01/{self.year}-10-31'
-        # wheat, spring barley efficient version
-        # time_of_interest = f'{self.year}-02-01/{self.year}-07-31'
-        # All year except for Nov and Dec
-        time_of_interest = f'{self.year}-01-01/{self.year}-10-31'
+        time_of_interest = self.time_of_interest
 
         # Setup connections to planetary computer and search for available S-2 images
         catalog = pystac_client.Client.open(
@@ -148,18 +147,19 @@ class s2:
 
         for collection in self.__class__.bands:
             for i in range(n_cores):
-                file_path = os.path.join(self.csv_path, f'run_{collection}_{i}.csv')
+                if n_cores==1:
+                    file_path = os.path.join(self.csv_path, f'run_{collection}_all.csv')
+                else:
+                    file_path = os.path.join(self.csv_path, f'run_{collection}_{i}.csv')
                 with open(file_path, 'w') as f1:
                     writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
                     writer.writerow(self.row_head)
 
     def find_existing(self, search_s2, core=None):
         """
-        Function needed in case the file2tab crashed during process. It searches for the ECOSTRESS files
-        that have not yet been processed. Same parameters required as for self.file2tab
-        :param search_lst: list of ECOSTRESS tiles from where to extract the data
-        :param search_geo: list of the corresponding lat/lon files from ECOSTRESS
-        :param collection: str of ECOSTRESS data that should be searched for: tested vars are 'ECO2CLD' and 'ECO2LSTE'
+        Function needed in case the file2tab crashed during process. It searches for the s2 files
+        that have not yet been processed.
+        :param search_s2: list of s2 tiles from where to extract the data
         :param core: int for on which CPU core the processing is done
         :return: two updated lists of search_lst and search_geo including all files that do not have results yet.
         """
@@ -177,6 +177,11 @@ class s2:
         return search_s2_new
 
     def run_extraction(self, n_cores=4, new=False):
+        """
+        :param n_cores: int number of cores on which parallel computation should be done
+        :param new: boolean. True if the calculation starts. False, if calculation was interrupted and needs to be continued
+        :return: runs the function self.extract_s2 in parallel.
+        """
         if new:
             self.createcsv(n_cores=n_cores)
         search_s2 = self.find_s2_items()
@@ -189,13 +194,14 @@ class s2:
                 if end > len(search_s2):
                     end = len(search_s2)
                 this_search_s2 = search_s2[start:end]
-                # pool.submit(self.extract_s2, items=this_search_s2, core=i)
+                pool.submit(self.extract_s2, items=this_search_s2, core=i)
                 # Non-parallel computing use the following
-                self.extract_s2(items=this_search_s2, core=None)
+                # self.extract_s2(items=this_search_s2, core=None)
 
     def merge_files(self):
         """
-        This function merges all tables that were established with self.run to one single table
+        This function merges all tables that were established with self.run to one single table. Is only needed if
+        s2 extraction is run in parallel
         :return: writes csv file
         """
         for collection in self.__class__.bands:
@@ -205,6 +211,10 @@ class s2:
             df.to_csv(os.path.join(self.csv_path, f"run_{collection}_all.csv"), index=0)
 
     def clean_csv(self):
+        """
+        :return: removes nan rows from resulting csv files from output run_extraction or merge files. The updated files
+        are stored as feather to make upcoming processing faster.
+        """
         path = rf'{self.table_path}/{self.region}/{self.crop}'
         years = os.listdir(path)
         for year in years:
@@ -212,26 +222,53 @@ class s2:
             bands = [a for a in os.listdir(path_new) if a.endswith('.csv')]
             for band in bands:
                 file = pd.read_csv(os.path.join(path_new, band), index_col=0)
-                file_new = file.dropna(axis=0, how='all', subset=file.columns[1:])
-                file_new.to_csv(os.path.join(path_new, band), index=True)
+                file_new = file.dropna(axis=0, how='all', subset=file.columns[1:]).reset_index()
+                file_new.to_feather(os.path.join(path_new, band.replace('.csv', '.feather')))
+
+    def field2nuts(self):
+        """
+        :return: aggregates field level data to NUTS4 for Austria
+        """
+        #Prepare scene classification mask to only use values from fields without disturbances -> i.e. SCL classes 4,5,6
+        scl_path = os.path.join(self.csv_path, f'run_SCL_all.feather')
+        scl = pd.read_feather(scl_path)
+        sub_scl = scl.iloc[:,2:].fillna(0).astype('int')
+        cloud_mask = sub_scl.where(sub_scl >= 4)
+        cloud_mask = cloud_mask.where(cloud_mask <= 6).notna()
+        cloud_mask.index = scl.observation
+
+        all_nuts = np.unique(self.fields.g_id)
+        bands = [a for a in self.__class__.bands if not a=='SCL']
+        for band in bands:
+            file_path = os.path.join(self.csv_path, f'run_{band}_all.feather')
+            file = pd.read_feather(file_path)
+            file.iloc[:, 2:] = file.iloc[:, 2:][cloud_mask]
+            nuts_file = file.iloc[:, :2]
+            nuts_file = nuts_file.reindex(columns=['observation', 'cloud_cover[%]']+list(all_nuts))
+
+            for nut in all_nuts:
+                fields_in_nuts = [int(a) for a in self.fields.FS_KENNUNG[self.fields.g_id == nut].values]
+                fields_in_nuts = [a for a in fields_in_nuts if a in list(file.columns)]
+                sub_file = file.loc[:,fields_in_nuts]
+                nuts_file.loc[:,nut] = sub_file.mean(axis=1)
+            nuts_file.to_feather(os.path.join(self.csv_path, f'run_{band}_all_nuts.feather'))
 
     def table2nc(self):
         """
         :return:combines all csv files with the data of the individual S-2 L2A Bands to one netcdf file
         """
-
-        #define all sentinal-2 L2A bands that should be considered
-        band = self.__class__.bands[0]
-
         #Load first file to get all fields names
-        file_path = os.path.join(self.csv_path, f'run_{band}_all.csv')
-        file = pd.read_csv(file_path, index_col=0)
-        fields_o = file.columns[1:]
+        band = self.__class__.bands[0]
+        #ToDo: link below can be adjusted f'run_{band}_all_nuts.feather' for converstion of nuts level data
+        # or f'run_{band}_all.feather' for field level conversion
+        file_path = os.path.join(self.csv_path, f'run_{band}_all_nuts.feather')
+        file = pd.read_feather(file_path)
+        fields_o = file.columns[2:]
 
         #Filter fields with only nan values
-        nan_fields = file.iloc[:,1:].isna().all(axis=0)
+        nan_fields = file.iloc[:,2:].isna().all(axis=0)
         fields = fields_o[~nan_fields]
-
+        #
         nc_path = os.path.join(self.csv_path, 'nc')
         if not os.path.exists(nc_path):
             os.makedirs(nc_path)
@@ -243,32 +280,32 @@ class s2:
         #Loop through all fields to establish one nc field per field with all bands
         for f, field in enumerate(fields):
             #loop through all bands to collect information of all bands per field
-            for b,band in enumerate(self.__class__.bands):
-                file_path = os.path.join(self.csv_path, f'run_{band}_all.csv')
-                file = pd.read_csv(file_path, index_col=0)
-                file.iloc[:,1:] = file.iloc[:,1:].round()
+            for b,band in enumerate(self.__class__.bands[:-1]):
+                file_path = os.path.join(self.csv_path, f'run_{band}_all_nuts.feather')
+                file = pd.read_feather(file_path)
+                file.iloc[:,2:] = file.iloc[:,2:].round()
 
                 #Split file into median and std
                 med_f = file.iloc[::2, :]
                 std_f = file.iloc[1::2, :]
                 #Remove rows with only nan
-                nan_fields = med_f.iloc[:, 1:].isna().all(axis=1)
+                nan_fields = med_f.iloc[:, 2:].isna().all(axis=1)
                 med_f = med_f[~nan_fields.values]
                 std_f = std_f[~nan_fields.values]
 
                 #check if there are only std values in the std_f file
-                char = [a.split('_')[1] for a in std_f.index]
+                char = [a.split('_')[1] for a in std_f.iloc[:,0]]
                 if not char[1:]==char[:-1]:
                     raise ValueError('There are not only std values in the std file')
 
                 #Establish a pandas Series as target variable with daily timestep from 2016 to 2022
-                dates_all = pd.date_range(start='1/1/2016', end='31/12/2022')
+                dates_all = pd.date_range(start=f'1/1/{self.year}', end=f'31/12/{self.year}')
                 target_var = pd.Series(data=None, index=dates_all)
 
                 #Establish pandas series with sentinel-2 data as loaded in the file and merge it with the target series
-                dates = [datetime.strptime(a.split('_')[0], '%Y-%m-%d') for a in med_f.index]
-                med_field = pd.Series(data=med_f.iloc[:, f+1].values, index=dates)
-                std_field = pd.Series(data=std_f.iloc[:, f+1].values, index=dates)
+                dates = [datetime.strptime(a.split('_')[0], '%Y-%m-%d') for a in med_f.iloc[:,0]]
+                med_field = pd.Series(data=med_f.iloc[:, f+2].values, index=dates)
+                std_field = pd.Series(data=std_f.iloc[:, f+2].values, index=dates)
 
                 #resample to daily values for cases where there are several observations per day
                 med_field = med_field.resample('D').mean()
@@ -283,7 +320,7 @@ class s2:
                 #Establish new xr Dataset in first loop. Afterwards add bands to this file.
                 if b == 0:
                     #Add cloud cover info
-                    cloud_field = pd.Series(data=med_f.iloc[:,0].values, index=dates)
+                    cloud_field = pd.Series(data=med_f.iloc[:,1].values, index=dates)
                     cloud_field = cloud_field.resample('D').mean()
                     _, cloud_daily = target_var.align(cloud_field, axis=0)
                     xr_file = xr.Dataset.from_dataframe(pd.DataFrame(cloud_daily, columns=[f'cloud_cover']))
@@ -327,53 +364,59 @@ class s2:
                         value_range='1-10000'
                     )
             xr_file = xr_file.rename({'index':'time'})
-            # print(xr_file.time)
-            # comp = dict(zlib=True, complevel=9)
-            # encoding = {var: comp for var in xr_file.data_vars}
             xr_file.to_netcdf(path=os.path.join(nc_path, f'{field}.nc'))
 
     # The nc files are cleaned (outlier removed and cloud masked) with the following function
-    def cleaning_s2(self):
+    def cleaning_s2(self, cloud_flag=False):
         """
-        :return:
+        :param cloud_flag: boolean, true if data still needs to be cloud flagged. False if thats already done. The
+        latter is the case if the fields are already aggregated to nuts level
+        :return: Removes outliers and saves new nc file
         """
         path = os.path.join(self.csv_path, 'nc')
         fields = os.listdir(path)
         fields = [field for field in fields if field.endswith('.nc')]
 
-        bands = ['B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B11', 'B12']
+        bands = self.__class__.bands[:-1]
         bands = [band+'_median' for band in bands]
 
         #Load required data
         for field in fields:
             #Load file and extract scene classification
             ds = xr.open_dataset(os.path.join(path, field))
-            scl = ds.SCL_mode.values
-            if np.sum(scl==[-9999]*len(scl))==len(scl):
-                print(f'file {field} has only nan values')
-                continue
+
+            if cloud_flag:
+                scl = ds.SCL_mode.values
+                if np.sum(scl==[-9999]*len(scl))==len(scl):
+                    print(f'file {field} has only nan values')
+                    continue
+
+                # Establish mask with valid observations. I.e. Scene classification without clouds, snow etc.
+                # scl as in https://www.sciencedirect.com/science/article/pii/S0924271623002654
+                ok_scene_class = [4, 5, 6]
+                a_mask = np.in1d(scl, ok_scene_class)
 
             # Sentinel-2 processing changed on 2022-01-25 introducing an offset of 1000
             # https://github.com/stactools-packages/sentinel2/issues/44
 
             time = ds.time.values
             offset_loc = np.where(time>=pd.to_datetime('2022-01-25', format='%Y-%m-%d'))[0]
-            #Establish mask with valid observations. I.e. Scene classification without clouds, snow etc.
-            #scl as in https://www.sciencedirect.com/science/article/pii/S0924271623002654
-            ok_scene_class = [4, 5, 6]
-            a_mask = np.in1d(scl, ok_scene_class)
 
             #Load all bands, mask them with scl mask and remove outliers
             for band in bands:
                 band_values = ds[band].values
                 #remove offset of 1000 since Jan 25 2022
                 band_values[offset_loc] = band_values[offset_loc]-1000
-                band_values_masked = band_values[a_mask]
-
-                #remove outliers
-                band_values_masked_no_ol = removeOutliers(band_values_masked)
-                ds[band].values = [-9999]*len(ds[band].values)
-                ds[band].values[a_mask] = band_values_masked_no_ol
+                if cloud_flag:
+                    band_values_masked = band_values[a_mask]
+                    #remove outliers
+                    band_values_masked_no_ol = removeOutliers(band_values_masked)
+                    ds[band].values = [-9999] * len(ds[band].values)
+                    ds[band].values[a_mask] = band_values_masked_no_ol
+                else:
+                    band_values_masked_no_ol = removeOutliers(band_values)
+                    ds[band].values = [-9999] * len(ds[band].values)
+                    ds[band].values = band_values_masked_no_ol
 
             path_out = os.path.join(path, 'cleaned')
             if not os.path.exists(path_out):
@@ -382,6 +425,9 @@ class s2:
 
     # As a last step, Vegetation indices are added to the nc files.
     def add_indices2nc(self):
+        """
+        :return: writes new nc file with different vegetation indices.
+        """
         file_path = os.path.join(self.csv_path, 'nc', 'cleaned')
         files = os.listdir((file_path))
         files = [file for file in files if file.endswith('.nc')]
@@ -466,24 +512,30 @@ def indices_calc(B2,B4,B8,B11,B12):
 
 def removeOutliers(x, outlierConstant=2):
     a = np.array(x)
-    upper_quartile = np.percentile(a, 75)
-    lower_quartile = np.percentile(a, 25)
+    a_masked = a[np.where(a>-9999)]
+    upper_quartile = np.percentile(a_masked, 75)
+    lower_quartile = np.percentile(a_masked, 25)
     IQR = (upper_quartile - lower_quartile) * outlierConstant
     quartileSet = (lower_quartile - IQR, upper_quartile + IQR)
-    a = np.where(((a>=quartileSet[0]) & (a<=quartileSet[1])),a,np.nan)
+    a = np.where(((a>=quartileSet[0]) & (a<=quartileSet[1])),a,-9999)
     return a
 
 if __name__ == '__main__':
     warnings.filterwarnings('ignore')
     start_pro = datetime.now()
     print(start_pro)
-    year = 2016
-    a = s2(region='Austria', year=year, crop='maize')
-    # a.run_extraction(n_cores=1, new=False)
-    # a.merge_files()
-    # a.clean_csv()
-    a.table2nc()
-    # a.cleaning_s2()
-    # a.add_indices2nc()
+    # year = 2016
+    for year in range(2016,2023):
+        a = s2(region='Austria', year=year, crop='maize')
+        a.run_extraction(n_cores=1, new=False)
+        a.merge_files()
+        a.clean_csv()
+        # ToDo field2nuts saves much time, as the data is directly merged to nuts before conversion to nc.
+        #  Field data would of course by prefered, but if not feasible, aggregation can be done with the following:
+        a.field2nuts()
+
+        a.table2nc()
+        a.cleaning_s2()
+        a.add_indices2nc()
 
     print(f'calculation stopped and took {datetime.now() - start_pro}')

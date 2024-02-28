@@ -29,13 +29,14 @@ class coarse_scale_data:
         self.csv_path = os.path.join(self.table_path, region)
         if not os.path.exists(self.csv_path): os.makedirs(self.csv_path)
         self.basepath = r'D:/DATA/yipeeo/Predictors/ERA5-Land'
+        self.nuts_file_path = fr'D:\DATA\yipeeo\Crop_data\Crop_yield\{self.region}\maize.shp'
 
     def extract_data(self, parameter):
         """
         :return: writes csv files with the s2 information per parameter
         """
         # basepath = '/eodc/private/yipeeo/ERA5_land'
-        fields = gpd.read_file(fr'D:\DATA\yipeeo\Crop_data\Crop_yield\{self.region}\maize.shp')
+        fields = gpd.read_file(self.nuts_file_path)
         fields = fields.set_crs(epsg=4326)
         fields = fields.drop_duplicates(subset='g_id')
         row_head = ['date'] + [str(int(i)) for i in list(fields.g_id.values)]

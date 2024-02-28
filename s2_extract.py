@@ -20,7 +20,7 @@ from pystac.extensions.eo import EOExtension as eo
 
 class s2:
     """
-    Class to retrieve ecostress data and extract it to field level
+    Class to retrieve sentinel-2 L2A data and extract it to field level
     """
     # ToDo: There are several ways to save some computation time. First, change bands to the second list below.
     #  Afterwards, self.time_of_interest can be adjusted in def __init__

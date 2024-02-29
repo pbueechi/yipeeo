@@ -12,7 +12,7 @@ from datetime import datetime
 from rasterio.mask import mask
 
 
-
+#ToDo: this code needs to be run per country: Austria, CZR, Netherlands
 class coarse_scale_data:
     """
     Class to retrieve coarse scale data to NUTS level
@@ -122,6 +122,7 @@ class coarse_scale_data:
             xr_file.to_netcdf(path=os.path.join(nc_path, f'{field}.nc'))
 
 if __name__=='__main__':
+    #ToDo: this code needs to be run per country: Austria, CZR, Netherlands
     a = coarse_scale_data('Austria', 'ERA5-Land')
     # a.extract_data()
     a.table2nc()

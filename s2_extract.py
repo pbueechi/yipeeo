@@ -18,6 +18,7 @@ from datetime import datetime
 from rasterio.mask import mask
 from pystac.extensions.eo import EOExtension as eo
 
+#ToDo: this code needs to be run separately for the three crops winter wheat, maize and spring barley for the countries CZR and Austria
 class s2:
     """
     Class to retrieve sentinel-2 L2A data and extract it to field level
@@ -521,6 +522,7 @@ def removeOutliers(x, outlierConstant=2):
     return a
 
 if __name__ == '__main__':
+    #ToDo: this code needs to be run separately for the three crops winter wheat, maize and spring barley for the countries CZR and Austria
     warnings.filterwarnings('ignore')
     start_pro = datetime.now()
     print(start_pro)

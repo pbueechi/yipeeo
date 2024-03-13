@@ -1,4 +1,5 @@
-import os
+import os, sys
+import time
 import gc
 import pystac_client
 import planetary_computer
@@ -28,7 +29,7 @@ class s2:
     bands = ['B02','B03','B04','B05','B06','B07','B08','B8A','B11','B12','SCL']
     # bands = ['B02','B04','B08','B11','B12','SCL']
 
-    def __init__(self, region, year, crop):
+    def __init__(self, region, year, crop, data_dir, out_dir):
         """
         :param region: str of name of location. For the example dataset rost must be used. For NUTS3 level different name can be used
         """
@@ -36,8 +37,12 @@ class s2:
         self.crop = crop
         self.year = year
         #ToDo Replace the two following links with where the output should be stored and the link to the shapefile with the fields
-        self.table_path = 'D:/data-write/YIPEEO/predictors/S2_L2A/ts'
-        self.fields = gpd.read_file(f'D:/DATA/yipeeo/Crop_data/Crop_class/{region}/nuts/{crop}_{year}.shp')
+
+        self.table_path = f'{out_dir}/predictors/S2_L2A/ts'
+        self.fields = gpd.read_file(f'{data_dir}/{region}/nuts/{crop}_{year}.shp')
+        #self.table_path = 'D:/data-write/YIPEEO/predictors/S2_L2A/ts'
+        #self.fields = gpd.read_file(f'D:/DATA/yipeeo/Crop_data/Crop_class/{region}/nuts/{crop}_{year}.shp')
+        
         self.fields = self.fields.set_crs(epsg=4326)
         self.csv_path = os.path.join(self.table_path, region, crop, str(year))
         if not os.path.exists(self.csv_path): os.makedirs(self.csv_path)
@@ -57,52 +62,62 @@ class s2:
         :return: writes csv files with the s2 information per band and core
         """
         # Start looping through all S-2 scenes and defined S-2 bands
-        for it_num, item in enumerate(items):
-            print(f'done: {it_num}/{len(items)} from {item.datetime.date()} at {datetime.now()}')
-            signed_item = planetary_computer.sign(item)
+        try:
+            for it_num, item in enumerate(items):
+                print(f'core={core}: {it_num}/{len(items)} from {item.datetime.date()} at {datetime.now()}')
+                signed_item = planetary_computer.sign(item)
 
-            # Define extent of current scene and reduce fields to the ones in this extent
-            exts = pd.DataFrame(item.geometry['coordinates'][0], columns=['x', 'y'])
-            xmin, ymin, xmax, ymax = exts.min(axis=0).x, exts.min(axis=0).y, exts.max(axis=0).x, exts.max(axis=0).y
-            used_fields = self.fields.clip(mask=[xmin, ymin, xmax, ymax])
-            for band in self.__class__.bands:
-                # Load S2 scenes
-                src = rasterio.open(signed_item.assets[band].href)
-                fields = used_fields.to_crs(src.crs)
-                # Per scene and band extract and summarize the information per field
-                fields_data = pd.DataFrame(data=None, index=range(2), columns=self.row_head)
-                fields_data.iloc[:, 0] = [f'{item.datetime.date()}_median', f'{item.datetime.date()}_std']
-                fields_data.iloc[:, 1] = [eo.ext(item).cloud_cover, eo.ext(item).cloud_cover]
+                # Define extent of current scene and reduce fields to the ones in this extent
+                exts = pd.DataFrame(item.geometry['coordinates'][0], columns=['x', 'y'])
+                xmin, ymin, xmax, ymax = exts.min(axis=0).x, exts.min(axis=0).y, exts.max(axis=0).x, exts.max(axis=0).y
+                used_fields = self.fields.clip(mask=[xmin, ymin, xmax, ymax])
+                for band in self.__class__.bands:
+                    # Load S2 scenes
 
-                if core:
-                    file_path = os.path.join(self.csv_path, f'run_{band}_{core}.csv')
-                else:
-                    file_path = os.path.join(self.csv_path, f'run_{band}_all.csv')
+                    # scao
+                    sign_href = planetary_computer.sign(signed_item.assets[band].href)
+                    #src = rasterio.open(signed_item.assets[band].href)
+                    src = rasterio.open(sign_href)
 
-                for ipol in range(len(fields)):
-                    polygon = fields[ipol:ipol + 1]
-                    try:
-                        out_image, out_transform = mask(src, polygon.geometry, crop=True)
-                        out_image = np.where(out_image == 0, np.nan, out_image)
-                        if np.isnan(out_image).all():
-                            fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nan, np.nan]
-                        else:
-                            if band == 'SCL':
-                                arr_flat = out_image.flatten()
-                                arr_flat = arr_flat[~np.isnan(arr_flat)]
-                                fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [int(st.mode(arr_flat)[0][0]),
-                                                                                  np.nanstd(out_image)]
+                    fields = used_fields.to_crs(src.crs)
+                    # Per scene and band extract and summarize the information per field
+                    fields_data = pd.DataFrame(data=None, index=range(2), columns=self.row_head)
+                    fields_data.iloc[:, 0] = [f'{item.datetime.date()}_median', f'{item.datetime.date()}_std']
+                    fields_data.iloc[:, 1] = [eo.ext(item).cloud_cover, eo.ext(item).cloud_cover]
+
+                    if core:
+                        file_path = os.path.join(self.csv_path, f'run_{band}_{core}.csv')
+                    else:
+                        file_path = os.path.join(self.csv_path, f'run_{band}_all.csv')
+
+                    for ipol in range(len(fields)):
+                        polygon = fields[ipol:ipol + 1]
+                        try:
+                            out_image, out_transform = mask(src, polygon.geometry, crop=True)
+                            out_image = np.where(out_image == 0, np.nan, out_image)
+                            if np.isnan(out_image).all():
+                                fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nan, np.nan]
                             else:
-                                fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nanmedian(out_image),
-                                                                                  np.nanstd(out_image)]
-                    except:
-                        fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nan, np.nan]
-                with open(file_path, 'a') as f1:
-                    writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
-                    writer.writerow(list(fields_data.iloc[0, :]))
-                    writer.writerow(list(fields_data.iloc[1, :]))
-                src.close()
-                gc.collect()
+                                if band == 'SCL':
+                                    arr_flat = out_image.flatten()
+                                    arr_flat = arr_flat[~np.isnan(arr_flat)]
+                                    fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [int(st.mode(arr_flat)[0][0]),
+                                                                                    np.nanstd(out_image)]
+                                else:
+                                    fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nanmedian(out_image),
+                                                                                    np.nanstd(out_image)]
+                        except:
+                            fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nan, np.nan]
+                    with open(file_path, 'a') as f1:
+                        writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
+                        writer.writerow(list(fields_data.iloc[0, :]))
+                        writer.writerow(list(fields_data.iloc[1, :]))
+                    src.close()
+                    gc.collect()
+            
+            return None
+        except Exception as e:
+            return e
 
     def find_s2_items(self):
         """
@@ -152,9 +167,11 @@ class s2:
                     file_path = os.path.join(self.csv_path, f'run_{collection}_all.csv')
                 else:
                     file_path = os.path.join(self.csv_path, f'run_{collection}_{i}.csv')
-                with open(file_path, 'w') as f1:
-                    writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
-                    writer.writerow(self.row_head)
+                
+                if not os.path.exists(file_path):
+                    with open(file_path, 'w') as f1:
+                        writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
+                        writer.writerow(self.row_head)
 
     def find_existing(self, search_s2, core=None):
         """
@@ -164,40 +181,82 @@ class s2:
         :param core: int for on which CPU core the processing is done
         :return: two updated lists of search_lst and search_geo including all files that do not have results yet.
         """
-        done_files_path = os.path.join(self.csv_path, 'run_SCL_all.csv')
-        if core:
-            done_files_path = os.path.join(self.csv_path, f'run_SCL_{core}.csv')
-        done_files = pd.read_csv(done_files_path, index_col=0)
-        done_dates = [a.split('_')[0].replace('-','') for a in done_files.index]
+        if core is None:
+            done_files_path = os.path.join(self.csv_path, 'run_SCL_all.csv')
+            done_files = pd.read_csv(done_files_path, index_col=0)
+            done_dates = [a.split('_')[0].replace('-','') for a in done_files.index]
+        else:
+            fnames =  glob.glob(os.path.join(self.csv_path, f'run_SCL_*.csv'))
+            done_dates = []
+            for done_files_path in fnames:
+                done_files = pd.read_csv(done_files_path, index_col=0)
+                done_dates.extend([a.split('_')[0].replace('-','') for a in done_files.index])
+            done_dates = list(set(done_dates))
+
         search_s2_new = []
         for i in range(len(search_s2)):
             item_i = str(search_s2[i])
             date_time_a = item_i.split('_')[2][:8]
-            if not date_time_a in done_dates:
+            if (done_files is None) or (not date_time_a in done_dates):
                 search_s2_new.append(search_s2[i])
         return search_s2_new
 
-    def run_extraction(self, n_cores=4, new=False):
+    def run_extraction(self, n_cores=4):
         """
         :param n_cores: int number of cores on which parallel computation should be done
         :param new: boolean. True if the calculation starts. False, if calculation was interrupted and needs to be continued
         :return: runs the function self.extract_s2 in parallel.
         """
-        if new:
-            self.createcsv(n_cores=n_cores)
+        status = "restart"
+        while status == "restart":
+            status = self.do_run_extraction(n_cores)
+            time.sleep(10)
+
+    def do_run_extraction(self, n_cores):
+        # create csv file if not exists
+        self.createcsv(n_cores=n_cores)
+
         search_s2 = self.find_s2_items()
         print(len(search_s2))
-        search_s2 = self.find_existing(search_s2)
-        with ProcessPoolExecutor(max_workers=mp.cpu_count()) as pool:
-            for i in range(n_cores):
-                chunks = int(len(search_s2) / n_cores)
-                start, end = i * chunks, (i + 1) * chunks
-                if end > len(search_s2):
-                    end = len(search_s2)
-                this_search_s2 = search_s2[start:end]
-                pool.submit(self.extract_s2, items=this_search_s2, core=i)
-                # Non-parallel computing use the following
-                # self.extract_s2(items=this_search_s2, core=None)
+        search_s2 = self.find_existing(search_s2, n_cores)
+
+        results = []
+        if n_cores>1:
+            futures = []
+            with ProcessPoolExecutor(max_workers=mp.cpu_count()) as pool:
+                for i in range(n_cores):
+                    chunks = int(len(search_s2) / n_cores)
+                    start, end = i * chunks, (i + 1) * chunks
+                    if end > len(search_s2):
+                        end = len(search_s2)
+                    this_search_s2 = search_s2[start:end]
+                    f = pool.submit(self.extract_s2, items=this_search_s2, core=i)
+                    futures.append(f)
+            #import pdb; pdb.set_trace()
+            for f in futures:
+                results.append(f.result())
+        else:
+            # Non-parallel computing use the following
+            result = self.extract_s2(items=search_s2, core=None)
+            results.append(result)
+        
+        # analyse results
+        status = "succeed"
+        for result in results:
+            #import pdb; pdb.set_trace()
+            if result is None: 
+                continue
+            elif (isinstance(result, rasterio.errors.RasterioIOError)
+                    and str(result)=="HTTP response code: 403"):
+                    # planetary computer access error 403
+                    status = "restart"
+                    break
+            else: # other errors which should not occur
+                status = "error"
+                print ("Unknown Error:", str(reulst))
+
+        # status: succeed, restart , or error (unknown error)
+        return status
 
     def merge_files(self):
         """
@@ -521,23 +580,68 @@ def removeOutliers(x, outlierConstant=2):
     a = np.where(((a>=quartileSet[0]) & (a<=quartileSet[1])),a,-9999)
     return a
 
-if __name__ == '__main__':
+
+def main():
+
+    proc_step = sys.argv[1] # either download or postproc
+    region = sys.argv[2]
+    n_cores = int(sys.argv[3])
+
+    data_dir = "/yipeeo/data/cloud-geo/Crop_data/Crop_class"
+    out_dir = "/yipeeo/work/field_extraction"
+
+    # collection all crop type of each year for given region
+    crop_data = {}
+    for fname in glob.glob(f"{data_dir}/{region}/nuts/*.shp"):
+        bname = os.path.splitext(os.path.basename(fname))[0]
+        crop_type, crop_year = bname[:-5], int(bname[-4:])
+        if crop_type not in crop_data:
+            crop_data[crop_type] = []
+        crop_data[crop_type].append(crop_year)
+
+
     #ToDo: this code needs to be run separately for the three crops winter wheat, maize and spring barley for the countries CZR and Austria
     warnings.filterwarnings('ignore')
-    start_pro = datetime.now()
-    print(start_pro)
-    # year = 2016
-    for year in range(2016,2023):
-        a = s2(region='Austria', year=year, crop='maize')
-        a.run_extraction(n_cores=1, new=False)
-        a.merge_files()
-        a.clean_csv()
-        # ToDo field2nuts saves much time, as the data is directly merged to nuts before conversion to nc.
-        #  Field data would of course by prefered, but if not feasible, aggregation can be done with the following:
-        a.field2nuts()
 
-        a.table2nc()
-        a.cleaning_s2()
-        a.add_indices2nc()
+    for crop_type in sorted(crop_data.keys()):
+        years = sorted(crop_data[crop_type])
+        for year in years:
+            try:
+                
+                print (f"{region}: crop={crop_type} year={year} started")
+                start_pro = datetime.now()
+                a = s2(region=region, year=year, crop=crop_type, 
+                        data_dir=data_dir, out_dir=out_dir)
+                
+                if proc_step=="download":
+                    if region=="Austria" and crop_type=="maize" and year==2016:
+                        print (f"Skip: Austria {crop_type} {year}")
+                        continue
 
-    print(f'calculation stopped and took {datetime.now() - start_pro}')
+                    print (f"{region}: crop={crop_type} year={year} start run_extraction")        
+                    a.run_extraction(n_cores=n_cores)
+                    print (f"{region}: crop={crop_type} year={year} start merge_files")
+                    a.merge_files()
+                    print (f"{region}: crop={crop_type} year={year} start clean_csv")
+                    a.clean_csv()
+
+                # ToDo field2nuts saves much time, as the data is directly merged to nuts before conversion to nc.
+                #  Field data would of course by prefered, but if not feasible, aggregation can be done with the following:
+                import pdb; pdb.set_trace()
+                if proc_step=="postproc":
+                    print (f"{region}: crop={crop_type} year={year} start field2nuts")
+                    a.field2nuts()
+
+                    print (f"{region}: crop={crop_type} year={year} start table2nc")
+                    a.table2nc()
+                    a.cleaning_s2()
+                    a.add_indices2nc()
+
+                print(f'{region}: crop={crop_type} year={year} completed in{datetime.now() - start_pro}')
+            except Exception as e:
+                print ("Exception:", e)
+
+
+
+if __name__ == '__main__':
+    main()

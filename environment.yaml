@@ -1,0 +1,29 @@
+name: yipeeo_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3
+  - numpy
+  - pandas
+  - geopandas
+  - xarray
+  - scipy
+  - rasterio
+  - seaborn
+  - matplotlib
+  - pip 
+  - pystac
+  - pystac-client
+  - planetary-computer
+  - pillow
+  - tensorflow
+  - scikit-learn
+  - xgboost
+  - stackstac
+  - earthaccess
+  - pyresample
+  - pysal
+  - h5py
+  - pyarrow
+  - rich

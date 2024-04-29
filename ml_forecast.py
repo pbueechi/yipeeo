@@ -1,3 +1,4 @@
+#%%
 import os
 import itertools
 import csv
@@ -28,55 +29,61 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split, cross_val_score, cross_validate, RandomizedSearchCV
 from sklearn.dummy import DummyRegressor
 # from tensorflow import keras
-
+import inspect
+#%%
 #ToDo: remove farms and just use ukr_horod as country name
 class nc2table:
     """
     The Crop yield data and predictors are saved as nc files. This class extracts the predictors for the four months
     before harvest either in biweekly or monthly timesteps and saves them as csv files.
     """
-    def __init__(self, country, crop, farm=None):
+    def __init__(self, country, crop, yield_data_file, farm=None):
         self.country = country
         self.crop = crop
         self.farm = farm
         # Harvest dates in CZR around 25 July for winter wheat, 10 Oct for Maize, and 20 Jul Spring barley
         self.harvest_date = {'common winter wheat': [7,25], 'grain maize and corn-cob-mix': [10,10], 'spring barley': [7,20]}   #ToDo: dont hardcode harvest dates
-        self.crop_data = gpd.read_file(r'D:\DATA\yipeeo\Crop_data\Crop_yield\all\field_scale.shp')
+        self.crop_data = gpd.read_file(yield_data_file)
         self.lead_times = ['_LT4','_LT3','_LT2','_LT1']
-
-    def resample_s1(self, temp_step='M'):
+        
+    def resample_s1(self, s1_path, temp_step='M'):
         """
         Extracts Sentinel-1 data from nc files and saves them as csv
         :param temp_step: str either M or 2W for aggregating the data monthly or Biweekly
         :return: saves a csv file which will be used for the ML
         """
+        
         if temp_step=='2W':
             self.lead_times = ['_LT8', '_LT7', '_LT6', '_LT5','_LT4', '_LT3', '_LT2', '_LT1']
         params = ['sig0_vv_mean_daily', 'sig0_vh_mean_daily', 'sig0_cr_mean_daily', 'sig40_vv_mean_daily', 'sig40_vh_mean_daily', 'sig40_cr_mean_daily']
         inds = np.where((self.crop_data.country_co==self.country)&(self.crop_data.crop_type==self.crop)&(self.crop_data.c_year>2015))[0]
+        
+        
         if self.farm:
             inds = np.where((self.crop_data.farm_code == self.farm) & (self.crop_data.crop_type == self.crop) & (
                         self.crop_data.c_year > 2015))[0]
-        pred_file_path = r'D:\DATA\yipeeo\Predictors\S1\daily'
+        pred_file_path = s1_path
         self.crop_data = self.crop_data.iloc[inds,:]
-
-        pipeline_df = self.crop_data.iloc[:,[1,5,10]]
+        
+        pipeline_df = self.crop_data.iloc[:,[1,5,10]] #seems to be columns number for field id, year and yield in the shape file
         pipeline_df.index = range(len(pipeline_df.index))
         col_names = [[a+b for a in params] for b in self.lead_times]
         col_names = list(itertools.chain(*col_names))
         pipeline_df.loc[:,col_names] = np.nan
-
+        
         for df_ind, field, year in zip(pipeline_df.index, pipeline_df.field_id,pipeline_df.c_year):
-            field = field.split('_')[-1]
-            path_nc = os.path.join(pred_file_path, f'{self.country}_{field}_{year}_cleaned_cr_agg_daily.nc')
+            #field = field.split('_')[-1] #field id for other countries not in same format
+            #path_nc = os.path.join(pred_file_path, f'{self.country}_{field}_{year}_cleaned_cr_agg_daily.nc')
+            path_nc = os.path.join(pred_file_path, f'{field}_{year}_cleaned_cr_agg_daily.nc')
             if not os.path.exists(path_nc):
-                print(f'file {self.country}_{field}_{year}_cleaned_cr_agg_daily.nc does not exist')
+                #print(f'file {self.country}_{field}_{year}_cleaned_cr_agg_daily.nc does not exist')
+                print(f'file {field}_{year}_cleaned_cr_agg_daily.nc does not exist')
                 continue
-            s2 = xr.open_dataset(path_nc)
+            s1 = xr.open_dataset(path_nc)
             for param in params:
                 this_cols = [a for a in pipeline_df.columns if a.startswith(param)]
-                vals = list(itertools.chain(*s2[param].values))
-                ndvi = pd.Series(vals, s2.time)
+                vals = list(itertools.chain(*s1[param].values))
+                ndvi = pd.Series(vals, s1.time)
                 ndvi_m = ndvi.resample(temp_step).mean()
                 this_harvest_date = pd.to_datetime(f'{year}-{self.harvest_date[self.crop][0]}-{self.harvest_date[self.crop][1]-2}') #harvest date -2 days to make sure harvested field is not included
                 start_date = this_harvest_date - DateOffset(months=4)
@@ -92,7 +99,7 @@ class nc2table:
         else:
             pipeline_df.to_csv(f'Data/{temp_step}/{self.country}/{self.crop}_s1.csv')
 
-    def resample_s2(self, temp_step='M'):
+    def resample_s2(self, s2_path, temp_step='M'):
         """
         Extracts Sentinel-2 data from nc files and saves them as csv
         :param temp_step: str either M or 2W for aggregating the data monthly or Biweekly
@@ -106,7 +113,7 @@ class nc2table:
         if self.farm:
             inds = np.where((self.crop_data.farm_code == self.farm) & (self.crop_data.crop_type == self.crop) & (
                         self.crop_data.c_year > 2015))[0]
-        pred_file_path = rf'D:\DATA\yipeeo\Predictors\S2_L2A\{self.country}\nc'
+        pred_file_path = s2_path
         self.crop_data = self.crop_data.iloc[inds,:]
 
         pipeline_df = self.crop_data.iloc[:,[1,5,10]]
@@ -136,7 +143,7 @@ class nc2table:
             pipeline_df.to_csv(f'Data/{temp_step}/{self.country}/{self.farm}_{self.crop}_s2.csv')
         else:
             pipeline_df.to_csv(f'Data/{temp_step}/{self.country}/{self.crop}_s2.csv')
-
+    '''
     def resample_ecostress(self, temp_step='M'):
         """
         Extracts Sentinel-2 data from nc files and saves them as csv
@@ -154,7 +161,7 @@ class nc2table:
         else:
             inds = np.where((self.crop_data.country_co == self.country) & (self.crop_data.crop_type == self.crop) & (
                         self.crop_data.c_year > 2018))[0]
-        pred_file_path = rf'D:\DATA\yipeeo\Predictors\ECOSTRESS\{self.country}\nc'
+        pred_file_path = os.path.join(ecostress_file_path, self.country, 'nc')
         self.crop_data = self.crop_data.iloc[inds,:]
         pipeline_df = self.crop_data.iloc[:,[1,5,10]]
         pipeline_df.index = range(len(pipeline_df.index))
@@ -184,7 +191,7 @@ class nc2table:
             pipeline_df.to_csv(f'Data/{temp_step}/{self.country}/{self.farm}_{self.crop}_eco.csv')
         else:
             pipeline_df.to_csv(f'Data/{temp_step}/{self.country}/{self.crop}_eco.csv')
-
+    '''
     def previous_crop(self, temp_step='M'):
         print(self.crop_data)
         inds = np.where((self.crop_data.country_co==self.country)&(self.crop_data.crop_type==self.crop)&(self.crop_data.c_year>2018))[0]
@@ -233,7 +240,7 @@ class nc2table:
             csv_fin.to_csv(f'Data/{temp_step}/{self.country}/{self.farm}_{self.crop}_all.csv')
         else:
             csv_fin.to_csv(f'Data/{temp_step}/{self.country}/{self.crop}_all.csv')
-
+    '''
     def merge_all(self,temp_step):
         """
         :param temp_res: str either M or 2W for aggregating the data monthly or Biweekly
@@ -257,7 +264,7 @@ class nc2table:
             csv_fin.to_csv(f'Data/{temp_step}/{self.country}/{self.farm}_{self.crop}_all_2018.csv')
         else:
             csv_fin.to_csv(f'Data/{temp_step}/{self.country}/{self.crop}_all_2018.csv')
-
+    '''
 class ml:
     def __init__(self, crop, country, temp_res='M', farm=None):
         self.crop = crop
@@ -468,7 +475,7 @@ class ml:
             used_predictors = [a for a in predictors if int(a[-1]) >= lead_time]
             years = file.c_year
             years_obs = years.value_counts()
-            years_test = years_obs[years_obs > min_obs].index
+            years_test = years_obs[years_obs > min_obs].index #Are we taking less data to train and more data to test?
 
             for y,year in enumerate(years_test.values):
                 year_ind = np.where(years==year)[0]
@@ -610,7 +617,7 @@ class ml:
                 print(f'train perf for lead_time:{lead_time} R^2: {np.median(scores_kf_hp)}')
                 csv_file.loc[lead_time, predictor] = scores_kf_hp
         csv_file.to_pickle(f'Results/Validation/{self.crop}_{model}_s1_s2_{self.temp_res}_unmerged.csv')
-
+    '''
     def s1_vs_s2_eco(self, model):
         cols = ['s1', 's2', 'eco', 's1-s2', 'all']
         lead_times = [4, 3, 2, 1]
@@ -640,7 +647,7 @@ class ml:
                 print(f'{predictor} test perf for lead_time:{lead_time} R^2: {np.median(scores_kf_hp)}')
                 csv_file.loc[lead_time, predictor] = scores_kf_hp
         csv_file.to_pickle(f'Results/Validation/{model}_{self.crop}_s1_s2_ecostress_{self.temp_res}_new.csv')
-
+    '''
     def plot_res(self, comp='model_opt', model='XGB'):
         """
         :return: Plots the results generated by self.write_results to a boxplot comparing the performance of the model
@@ -865,8 +872,23 @@ class ml:
         return X, X_test, y, y_test
 
 
-
+#%%
 if __name__ == '__main__':
+    #Ideally i want to put filenames right in the beginning of the code instead of changing them in the classes
+    
+    #specify the working directory as well because the files would flood the code folder
+    working_dir = '/data/yipeeo_wd'
+    #and change the directory in the system to make it effective else it does not change anything
+    os.chdir(working_dir)
+    
+    parent_dir = '/home/nluintel/shares/climers/Projects/YIPEEO/07_data'
+    yield_data_file = os.path.join(parent_dir, 'Crop yield', 'Database', 'field_scale_lleida.shp')
+    s1_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 's1','daily')
+    s2_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 's2', 'Spain', 'lleida', 'nc')
+    #ecostress_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 'ECOSTRESS')
+    
+    
+
     #Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
     pd.set_option('display.max_columns', 15)
     warnings.filterwarnings('ignore')
@@ -876,58 +898,55 @@ if __name__ == '__main__':
     crops = ['common winter wheat','grain maize and corn-cob-mix','spring barley']
     # crop_summary_stats()
     # plot_crop_summary()
-    # for crop in crops[:1]:
-    #     a = nc2table(country='cz', farm='rost', crop=crop)
-    #     a.resample_ecostress(temp_step='M')
-    #     a.resample_s1(temp_step='M')
-    #     a.resample_s2(temp_step='M')
-    #     a.previous_crop()
-    #     a.merge_s1_s2(temp_step='M')
-    #     a.merge_all(temp_step='M')
-
-
-    # Forecasting
     for crop in crops[:1]:
-        a = ml(crop=crop, country='cz', farm='rost', temp_res='2W')
-        # a.s1_vs_s2()
-        a.plot_res(comp='s1s2')
-        # a.s1_vs_s2()
-        # a.cross_cor_predictors(lt=1)
-    #     a.feature_imp(lead_time=1)
-        # a = ml(crop=crop, country='cz', temp_res='M')
-        # for model in ['XGB','RF']:
-        #     a.runforecast_country(model=model, optimize=True)
-
-        # a.s1_vs_s2_eco(model='XGB')
-        # a.plot_res(comp='eco')
-    # for country in ['ua', 'nl']:
-    #     a = ml(crop=crops[1], country=country, temp_res='M')
-    #     a.runforecast_country(model='RF', optimize=True)
-    # for lead_time in [4,3,2,1]:
-    #     a.runforecast(lead_time=lead_time, model='XGB', feature_select=True, hyper_tune=True)
+        a = nc2table(country='es', crop=crop, yield_data_file=yield_data_file)
+        #a.resample_ecostress(temp_step='M')
+        a.resample_s1(s1_file_path, temp_step='M')
+        a.resample_s2(s2_file_path, temp_step='M')
+        a.previous_crop()
+        a.merge_s1_s2(temp_step='M')
+        #a.merge_all(temp_step='M')
 
 
-    # a.write_results()
-    # a.plot_res()
-    # a.runforecast_loocv(lead_time=1, preds=['sig40_vh','ndvi'])
-    # for lead_time in [2,1]:
-    #     a = ml()
-        # a.runforecast(country='cz',crop=crops[1], lead_time=lead_time)
-        # a.rundeepcast(farm='rost',crop=crop[1], lead_time=1)
-    print(f'calculation stopped and took {datetime.now() - start_pro}')
+    # # Forecasting
+    # for crop in crops[:1]:
+    #     a = ml(crop=crop, country='cz', farm='rost', temp_res='2W')
+    #     # a.s1_vs_s2()
+    #     a.plot_res(comp='s1s2')
+    #     # a.s1_vs_s2()
+    #     # a.cross_cor_predictors(lt=1)
+    # #     a.feature_imp(lead_time=1)
+    #     # a = ml(crop=crop, country='cz', temp_res='M')
+    #     # for model in ['XGB','RF']:
+    #     #     a.runforecast_country(model=model, optimize=True)
 
-    #ToDo: today:
-    # check test / train performance
-
-    #ToDo: later:
-    # Find optimal number of features
-    # LSTM
-    # always merge monthly but starting every two weeks
-    # Global model???
-    # feature_selection based on crosscors
+    #     # a.s1_vs_s2_eco(model='XGB')
+    #     # a.plot_res(comp='eco')
+    # # for country in ['ua', 'nl']:
+    # #     a = ml(crop=crops[1], country=country, temp_res='M')
+    # #     a.runforecast_country(model='RF', optimize=True)
+    # # for lead_time in [4,3,2,1]:
+    # #     a.runforecast(lead_time=lead_time, model='XGB', feature_select=True, hyper_tune=True)
 
 
+    # # a.write_results()
+    # # a.plot_res()
+    # # a.runforecast_loocv(lead_time=1, preds=['sig40_vh','ndvi'])
+    # # for lead_time in [2,1]:
+    # #     a = ml()
+    #     # a.runforecast(country='cz',crop=crops[1], lead_time=lead_time)
+    #     # a.rundeepcast(farm='rost',crop=crop[1], lead_time=1)
+    # print(f'calculation stopped and took {datetime.now() - start_pro}')
+
+    # #ToDo: today:
+    # # check test / train performance
+
+    # #ToDo: later:
+    # # Find optimal number of features
+    # # LSTM
+    # # always merge monthly but starting every two weeks
+    # # Global model???
+    # # feature_selection based on crosscors
 
 
-    
-
+# %%

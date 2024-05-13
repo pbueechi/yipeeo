@@ -4,7 +4,10 @@
 # Date: 2024-05-07
 # Created with: Visual Studio Code
 # Purpose: To get the 10 daily data from daily data
-Mamba Environment: climers
+Mamba Environment: yipeeo
+Caution! Be aware of the xarray version with pandas version, 
+because xarray resampling relies on pandas and I wasted two days
+trying to find out bug in the code while the library was problem
 '''
 #%%
 '''
@@ -15,9 +18,10 @@ Some searches and ChatGPT (several re-questioning) hints the best observation fo
     ndvi: max
     evi: max
     ndwi: min
-
+    cloud cover: min
+    nmdi: could not decide so taking median
 '''
-#%%
+#%% import libraries
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -25,7 +29,8 @@ from matplotlib import pyplot as plt
 import glob
 import os
 import datetime
-#%%
+from tqdm import tqdm
+#%% set up working environment
 #set working directory
 wd = '/data/yipeeo_wd'
 os.chdir(wd)
@@ -44,18 +49,13 @@ def find_directories(root_dir, target_dir):
             nc_directories.append(os.path.join(dirpath, target_dir))
     return nc_directories
 
-#get the list of directories with "nc" folder
-nc_directories = find_directories(s2_spain_dir, "nc")
-print("Directories named 'nc':", nc_directories)
-#now remove the path to indata_parent_dir from absolute path
+#now define a function to remove the path to indata_parent_dir from absolute path
 #and create folders in the same structure as the input data 
 # but in the output directory
 def get_rel_path(abs_path, parent_path):
     rel_path = os.path.relpath(abs_path, parent_path)
     return rel_path
-#%%
-nc_rel_path = [get_rel_path(ncpath, indata_parent_dir) for ncpath in nc_directories]
-out_abs_path = [os.path.join(out_parent_dir, ncpath) for ncpath in nc_rel_path]
+
 
 # %%
 #define a function to resample the data based on time aggregation
@@ -75,76 +75,73 @@ class resample:
         if maxmin == 'max':
             best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').max(skipna = True, keep_attrs = True)
         elif maxmin == 'min':
-            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').min()
+            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').min(skipna = True, keep_attrs = True)
+        elif maxmin == 'median':
+            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').median(skipna = True, keep_attrs = True)
         else:
-            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').median()
+            #print(f'Unknown compositing rule for {var}: Using mean')
+            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').mean(skipna = True, keep_attrs = True)
         self.ds_out[var] = best_var
+        self.ds_out[var].attrs['composite rule'] = maxmin
 
     def save_dsout(self, outfile):
         self.ds_out.attrs.update(self.ds.attrs)
+        self.ds_out.attrs['time stamp'] = 'The start date from when the aggregation began'
+        self.ds_out.attrs['aggregation'] = f'Aggregate with composite rule at {sampling_rate}-daily'
         self.ds_out.to_netcdf(outfile)
 #%%
-# def best_val(ds, var, maxmin = None, sampling_rate = 10):
-#     #calculate either maximum of minimum based on input
-#         if maxmin == 'max':
-#             best_var = ds[var].resample(time = f'{sampling_rate}D').max()
-#         elif maxmin == 'min':
-#             best_var = ds[var].resample(time = f'{sampling_rate}D').min()
-#         else:
-#             best_var = ds[var].resample(time = f'{sampling_rate}D').median()
-#         return best_var
 
-# def best_val(ds, var, maxmin = None, sampling_rate = 10):
-#     #calculate either maximum of minimum based on input
-#         if maxmin == 'max':
-#             best_var = ds[var].rolling(time = sampling_rate).max()
-#         elif maxmin == 'min':
-#             best_var = ds[var].resample(time = sampling_rate).min()
-#         else:
-#             best_var = ds[var].resample(time = sampling_rate).median()
-#         return best_var
-# %%
+#%%
+#define the variables to be used 
 sampling_rate = 30 #in days
 vars = ['cloud_cover', 'ndvi', 'evi', 'ndwi', 'nmdi']
 maxmins = ['min', 'max', 'max', 'min', 'unknown']
 var_maxmin_dict = dict(zip(vars, maxmins))
 # %%
-temp_nc = glob.glob(os.path.join(nc_directories[0], '*.nc'))[0]
-#resample_nc.best_val('ndvi', 'max', 10)
-ds = xr.open_dataset(temp_nc)
-ds.close()
-#ds = ds[vars]
-#%%
-resample_nc = resample(temp_nc, 30)
-for key, value in var_maxmin_dict.items():
-    resample_nc.best_val(key, value)
 
-# resample_nc.best_val('ndvi', 'max')
-# resample_nc.best_val('nmdi', 'min')
-# resample_nc.best_val('evi', 'max')
-#resample_nc.save_dsout('delete.nc')
-#resample_nc = best_val(ds, 'ndvi', 'max', sampling_rate)
-print(resample_nc)
+#get the list of directories with "nc" folder
+nc_directories = find_directories(s2_spain_dir, "nc")
+#print("Directories named 'nc':", nc_directories)
 
-#%%
-# #ds = ds[vars]
-# # ds_roll_max = ds.rolling(time = sampling_rate).max(skipna = True, keep_attrs = True)
-# # ds_roll_min = ds.rolling(time = sampling_rate).min(skipna = True)
-# # ds_roll_med = ds.rolling(time = sampling_rate).median(skipna = True)
-# ds_roll_max = ds.rolling(time = sampling_rate).max(skipna = True)
-# ds_roll_min = ds.rolling(time = sampling_rate).min(skipna = True)
-# ds_roll_med = ds.rolling(time = sampling_rate).median(skipna = True)
-# ds_roll_sel = ds_roll_max.copy()
-# # ds_roll_sel['cloud_cover'] = ds_roll_min['cloud_cover']
-# # ds_roll_sel['ndwi'] = ds_roll_min['ndwi']
-# # ds_roll_sel['nmdi'] = ds_roll_med['nmdi']
-# #ds_roll_sel = ds_roll_sel.sel(time = slice(ds_roll_sel.time[sampling_rate-1], None, sampling_rate))
-# #%%
-# plt.plot(ds.ndvi.data[~np.isnan(ds.ndvi.data)])
-# print('nothing')
-# plt.plot(np.unique(ds_roll_max.ndvi.data))
+# #get relativ path and then define the output folders retaining the same path structure
+# nc_rel_path = [get_rel_path(ncpath, indata_parent_dir) for ncpath in nc_directories]
+# out_abs_path = [os.path.join(out_parent_dir, ncpath) for ncpath in nc_rel_path]
+
+#loop through the nc directories
+for folder in nc_directories:
+    #get relative path of the subfolders
+    in_rel_path = get_rel_path(folder, indata_parent_dir)
+    #construct path to follow the same sequence as earlier
+    out_abs_path = os.path.join(out_parent_dir, in_rel_path)
+    #make directories if not present
+    if not os.path.exists(out_abs_path):
+        os.makedirs(out_abs_path)
+    #get the list of all nc file in the input folder
+    filelist = sorted(glob.glob(os.path.join(folder, '*.nc')))
+    #print(len(filelist))
+    #loop through each file in the folder
+    for file in tqdm(filelist):
+        basename = os.path.basename(file)
+        #filename = basename[:-3] + f'_{sampling_rate}D.nc'
+        outfile = os.path.join(out_abs_path, basename)
+        # print(file, '\n', outfile)
+        resample_init = resample(file, sampling_rate=10)
+        for key, value in var_maxmin_dict.items():
+            resample_init.best_val(key, value)
+        resample_init.save_dsout(outfile)
+
+
 # %%
-ndvi = ds['ndvi']
-ndvi_resample = ndvi.resample(time = '30D').mean(skipna = True)
-plt.plot(ndvi_resample.data)
+# #test case
+# temp_nc = glob.glob(os.path.join(nc_directories[0], '*.nc'))[0]
+# resample_nc = resample(temp_nc, 30)
+
+# for key, value in var_maxmin_dict.items():
+#     resample_nc.best_val(key, value)
+
+# print(resample_nc)
+
+#%%
+ds = xr.open_dataset(outfile); ds.close(); print(ds); print(ds.ndvi)
+ds.close(outfile)
 # %%

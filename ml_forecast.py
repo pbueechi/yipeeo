@@ -29,7 +29,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split, cross_val_score, cross_validate, RandomizedSearchCV
 from sklearn.dummy import DummyRegressor
 # from tensorflow import keras
-import inspect
+# import inspect
+# import fiona 
 #%%
 #ToDo: remove farms and just use ukr_horod as country name
 class nc2table:
@@ -240,7 +241,7 @@ class nc2table:
             csv_fin.to_csv(f'Data/{temp_step}/{self.country}/{self.farm}_{self.crop}_all.csv')
         else:
             csv_fin.to_csv(f'Data/{temp_step}/{self.country}/{self.crop}_all.csv')
-    '''
+    
     def merge_all(self,temp_step):
         """
         :param temp_res: str either M or 2W for aggregating the data monthly or Biweekly
@@ -264,7 +265,7 @@ class nc2table:
             csv_fin.to_csv(f'Data/{temp_step}/{self.country}/{self.farm}_{self.crop}_all_2018.csv')
         else:
             csv_fin.to_csv(f'Data/{temp_step}/{self.country}/{self.crop}_all_2018.csv')
-    '''
+    
 class ml:
     def __init__(self, crop, country, temp_res='M', farm=None):
         self.crop = crop
@@ -272,12 +273,21 @@ class ml:
         self.farm = farm
         self.temp_res = temp_res
 
+        if not os.path.exists('Results/Validation'):
+            os.makedirs('Results/Validation')
+
+        if not os.path.exists('Results/forecasts'):
+            os.makedirs('Results/forecasts')
+
+        if not os.path.exists('Results/Figure'):
+            os.makedirs('Results/Figures')
+
     #---------------------------------------------- Exploratory data analysis ----------------------------------------
     def calc_corrs(self):
         """
         :return: calculates correlations between predictors and crop yields
         """
-        file = pd.read_csv(f'Data/M/{self.country}/{self.crop}_all_2018.csv', index_col=0)
+        file = pd.read_csv(f'Data/M/{self.country}/{self.crop}_all.csv', index_col=0)
         predictors = list(file.columns[3:])
         predictors.remove('prev_year_crop')
         crop_yield = file.loc[:, 'yield']
@@ -510,8 +520,22 @@ class ml:
             results.to_csv(f'Results/forecasts/{self.country}_{self.crop}_{model}_loocv_opt={optimize}.csv')
 
     def runforecast_country(self, model='RF', optimize=False):
-        file_train = pd.read_csv(f'Data/M/cz/rost_{self.crop}_all.csv', index_col=0)
-        file_test = pd.read_csv(f'Data/M/{self.country}/polk_{self.crop}_all.csv', index_col=0)
+        if self.farm:
+            file_train = pd.read_csv(f'Data/{self.temp_res}/{self.country}/{self.farm}_{self.crop}_all.csv',
+                                     index_col=0)
+            #I changed the test file as well to the train file for this purpose but I could use any other file if requited
+            #Be careful to change the file name for else: part to
+            file_test = pd.read_csv(f'Data/{self.temp_res}/{self.country}/{self.farm}_{self.crop}_all.csv',
+                                     index_col=0)
+        else:
+            file_train = pd.read_csv(f'Data/{self.temp_res}/{self.country}/{self.crop}_all.csv',
+                                     index_col=0)
+            #I changed the test file as well to the train file for this purpose but I could use any other file if requited
+            file_test = pd.read_csv(f'Data/{self.temp_res}/{self.country}/{self.crop}_all.csv',
+                                     index_col=0)
+            
+        # file_train = pd.read_csv(f'Data/M/cz/rost_{self.crop}_all.csv', index_col=0)
+        # file_test = pd.read_csv(f'Data/M/{self.country}/polk_{self.crop}_all.csv', index_col=0)
         file_train = file_train.dropna(axis=0)
         file_test = file_test.dropna(axis=0)
         predictors = [p for p in file_train.columns[3:] if not p == 'date_last_obs']
@@ -587,7 +611,8 @@ class ml:
         csv_file.loc[:, 'lead_time'] = lead_times
         for lt,lead_time in enumerate(lead_times):
             csv_file.iloc[lt, 1:] = self.runforecast(lead_time=lead_time, model='XGB', feature_select=True, hyper_tune=True)
-        csv_file.to_pickle(f'Results/Validation/FE_HPT_{self.temp_res}_unmerged.csv')
+        
+        csv_file.to_pickle(f'Results/Validation/FE_HPT_{self.temp_res}_unmerged.pkl')
 
     def s1_vs_s2(self, model='XGB'):
         cols = ['s1', 's2', 'both']
@@ -616,7 +641,7 @@ class ml:
                 scores_kf_hp = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
                 print(f'train perf for lead_time:{lead_time} R^2: {np.median(scores_kf_hp)}')
                 csv_file.loc[lead_time, predictor] = scores_kf_hp
-        csv_file.to_pickle(f'Results/Validation/{self.crop}_{model}_s1_s2_{self.temp_res}_unmerged.csv')
+        csv_file.to_pickle(f'Results/Validation/{self.crop}_{model}_s1_s2_{self.temp_res}_unmerged.pkl')
     '''
     def s1_vs_s2_eco(self, model):
         cols = ['s1', 's2', 'eco', 's1-s2', 'all']
@@ -646,7 +671,7 @@ class ml:
                 scores_kf_hp = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
                 print(f'{predictor} test perf for lead_time:{lead_time} R^2: {np.median(scores_kf_hp)}')
                 csv_file.loc[lead_time, predictor] = scores_kf_hp
-        csv_file.to_pickle(f'Results/Validation/{model}_{self.crop}_s1_s2_ecostress_{self.temp_res}_new.csv')
+        csv_file.to_pickle(f'Results/Validation/{model}_{self.crop}_s1_s2_ecostress_{self.temp_res}_new.pkl')
     '''
     def plot_res(self, comp='model_opt', model='XGB'):
         """
@@ -654,7 +679,7 @@ class ml:
                     using S-1, S-2, and all data
         """
         if comp=='eco':
-            file = pd.read_pickle(f'Results/Validation/{model}_{self.crop}_s1_s2_ecostress_{self.temp_res}_new.csv')
+            file = pd.read_pickle(f'Results/Validation/{model}_{self.crop}_s1_s2_ecostress_{self.temp_res}_new.pkl')
             file.loc[:,'lead_time'] = file.index
 
             s1 = file.loc[:, ['lead_time', 's1']]
@@ -678,8 +703,8 @@ class ml:
             final = pd.concat([s1, s2, s1s2, eco, all])
 
         elif comp=='s1s2':
-            file = pd.read_pickle(f'Results/Validation/{self.crop}_XGB_s1_s2_{self.temp_res}_unmerged.csv')
-            # file = pd.read_pickle(f'Results/Validation/s1_vs_s2.csv')
+            file = pd.read_pickle(f'Results/Validation/{self.crop}_XGB_s1_s2_{self.temp_res}_unmerged.pkl')
+            # file = pd.read_pickle(f'Results/Validation/s1_vs_s2.pkl')
             file.loc[:,'lead_time'] = file.index
             s1 = file.loc[:, ['lead_time', 's1']]
             s2 = file.loc[:, ['lead_time', 's2']]
@@ -694,7 +719,7 @@ class ml:
             final = pd.concat([s1, s2, all])
 
         elif comp=='model_opt':
-            file = pd.read_pickle('Results/Validation/FE_HPT_M_unmerged.csv')
+            file = pd.read_pickle('Results/Validation/FE_HPT_M_unmerged.pkl')
             default_run = file.loc[:, ['lead_time', 'default_run']]
             FE = file.loc[:, ['lead_time', 'FE']]
             HPT = file.loc[:, ['lead_time', 'HPT']]
@@ -730,7 +755,8 @@ class ml:
         [s.axhline(x + .4, color=lin_col, linewidth=lw, alpha=alpha, zorder=1) for x in s.get_yticks()]
         [s.axhline(x, color='k', linewidth=lw, zorder=1) for x in s.get_yticks()]
         # plt.show()
-        plt.savefig(fr'M:\Projects\YIPEEO\04_deliverables_documents\03_ATBD\Figs\ml_validation/{comp}_{self.crop}_{self.temp_res}-2.png', dpi=300)
+
+        plt.savefig(fr'Results/Figures/ml_validation/{comp}_{self.crop}_{self.temp_res}-2.png', dpi=300)
         plt.close()
 
 
@@ -744,6 +770,8 @@ class ml:
         pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
         pipe.fit(X, y)
         feature_sel.loc[:,'FI'] = pipe.steps[1][1].feature_importances_
+        if not os.path.exists('Results/forecasts/feature_imp'):
+            os.makedirs('Results/forecasts/feature_imp')
         feature_sel.to_csv(f'Results/forecasts/feature_imp/{self.crop}.csv')
 
 
@@ -881,14 +909,12 @@ if __name__ == '__main__':
     #and change the directory in the system to make it effective else it does not change anything
     os.chdir(working_dir)
     
-    parent_dir = '/home/nluintel/shares/climers/Projects/YIPEEO/07_data'
+    parent_dir = '/data/yipeeo_wd/07_data'
     yield_data_file = os.path.join(parent_dir, 'Crop yield', 'Database', 'field_scale_lleida.shp')
     s1_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 's1','daily')
     s2_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 's2', 'Spain', 'lleida', 'nc')
     #ecostress_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 'ECOSTRESS')
     
-    
-
     #Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
     pd.set_option('display.max_columns', 15)
     warnings.filterwarnings('ignore')
@@ -898,35 +924,34 @@ if __name__ == '__main__':
     crops = ['common winter wheat','grain maize and corn-cob-mix','spring barley']
     # crop_summary_stats()
     # plot_crop_summary()
-    for crop in crops[:1]:
-        a = nc2table(country='es', crop=crop, yield_data_file=yield_data_file)
-        #a.resample_ecostress(temp_step='M')
-        a.resample_s1(s1_file_path, temp_step='M')
-        a.resample_s2(s2_file_path, temp_step='M')
-        a.previous_crop()
-        a.merge_s1_s2(temp_step='M')
-        #a.merge_all(temp_step='M')
 
+    # for crop in crops[:1]:
+    #     a = nc2table(country='es', crop=crop, yield_data_file=yield_data_file)
+    #     #a.resample_ecostress(temp_step='M')
+    #     a.resample_s1(s1_file_path, temp_step='M')
+    #     a.resample_s2(s2_file_path, temp_step='M')
+    #     a.previous_crop()
+    #     a.merge_s1_s2(temp_step='M')
+    #     a.merge_all(temp_step='M')
 
     # # Forecasting
     # for crop in crops[:1]:
-    #     a = ml(crop=crop, country='cz', farm='rost', temp_res='2W')
-    #     # a.s1_vs_s2()
+    #     a = ml(crop=crop, country='es', farm=None, temp_res='M')
     #     a.plot_res(comp='s1s2')
-    #     # a.s1_vs_s2()
-    #     # a.cross_cor_predictors(lt=1)
-    # #     a.feature_imp(lead_time=1)
-    #     # a = ml(crop=crop, country='cz', temp_res='M')
-    #     # for model in ['XGB','RF']:
-    #     #     a.runforecast_country(model=model, optimize=True)
+    #     a.s1_vs_s2()
+    #     a.cross_cor_predictors(lt=1)
+    #     a.feature_imp(lead_time=1)
+    #     a = ml(crop=crop, country='es', temp_res='M')
+    #     for model in ['XGB','RF']:
+    #         a.runforecast_country(model=model, optimize=True)
 
-    #     # a.s1_vs_s2_eco(model='XGB')
-    #     # a.plot_res(comp='eco')
-    # # for country in ['ua', 'nl']:
-    # #     a = ml(crop=crops[1], country=country, temp_res='M')
-    # #     a.runforecast_country(model='RF', optimize=True)
-    # # for lead_time in [4,3,2,1]:
-    # #     a.runforecast(lead_time=lead_time, model='XGB', feature_select=True, hyper_tune=True)
+        # a.s1_vs_s2_eco(model='XGB')
+        # a.plot_res(comp='eco')
+    # for country in ['ua', 'nl']:
+    #     a = ml(crop=crops[1], country=country, temp_res='M')
+    #     a.runforecast_country(model='RF', optimize=True)
+    # for lead_time in [4,3,2,1]:
+    #     a.runforecast(lead_time=lead_time, model='XGB', feature_select=True, hyper_tune=True)
 
 
     # # a.write_results()
@@ -947,6 +972,5 @@ if __name__ == '__main__':
     # # always merge monthly but starting every two weeks
     # # Global model???
     # # feature_selection based on crosscors
-
 
 # %%

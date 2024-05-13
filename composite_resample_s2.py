@@ -30,6 +30,7 @@ import glob
 import os
 import datetime
 from tqdm import tqdm
+from multiprocessing import Pool
 #%% set up working environment
 #set working directory
 wd = '/data/yipeeo_wd'
@@ -60,7 +61,7 @@ def get_rel_path(abs_path, parent_path):
 # %%
 #define a function to resample the data based on time aggregation
 #since best value differs for variables we do that separately
-class resample:
+class resample_s2:
     """
     Get the best value composites from each variable
     """
@@ -90,10 +91,21 @@ class resample:
         self.ds_out.attrs['aggregation'] = f'Aggregate with composite rule at {sampling_rate}-daily'
         self.ds_out.to_netcdf(outfile)
 #%%
+def process_file_s2(file):
+    basename = os.path.basename(file)
+    # Construct output file path
+    outfile = os.path.join(out_abs_path, basename)
+    # Initialize resample object
+    resample_init = resample_s2(file, sampling_rate)
+    # Perform resampling for each variable
+    for key, value in var_maxmin_dict.items():
+        resample_init.best_val(key, value)
+    # Save resampled dataset
+    resample_init.save_dsout(outfile)
 
 #%%
 #define the variables to be used 
-sampling_rate = 30 #in days
+sampling_rate = 10 #in days
 vars = ['cloud_cover', 'ndvi', 'evi', 'ndwi', 'nmdi']
 maxmins = ['min', 'max', 'max', 'min', 'unknown']
 var_maxmin_dict = dict(zip(vars, maxmins))
@@ -120,28 +132,18 @@ for folder in nc_directories:
     filelist = sorted(glob.glob(os.path.join(folder, '*.nc')))
     #print(len(filelist))
     #loop through each file in the folder
-    for file in tqdm(filelist):
-        basename = os.path.basename(file)
-        #filename = basename[:-3] + f'_{sampling_rate}D.nc'
-        outfile = os.path.join(out_abs_path, basename)
-        # print(file, '\n', outfile)
-        resample_init = resample(file, sampling_rate=10)
-        for key, value in var_maxmin_dict.items():
-            resample_init.best_val(key, value)
-        resample_init.save_dsout(outfile)
 
+    # for file in tqdm(filelist):
+    #     basename = os.path.basename(file)
+    #     #filename = basename[:-3] + f'_{sampling_rate}D.nc'
+    #     outfile = os.path.join(out_abs_path, basename)
+    #     # print(file, '\n', outfile)
+    #     resample_init = resample(file, sampling_rate=10)
+    #     for key, value in var_maxmin_dict.items():
+    #         resample_init.best_val(key, value)
+    #     resample_init.save_dsout(outfile)
 
-# %%
-# #test case
-# temp_nc = glob.glob(os.path.join(nc_directories[0], '*.nc'))[0]
-# resample_nc = resample(temp_nc, 30)
+    with Pool() as pool:
+        list(tqdm(pool.imap(process_file_s2, filelist), total = len(filelist)))
 
-# for key, value in var_maxmin_dict.items():
-#     resample_nc.best_val(key, value)
-
-# print(resample_nc)
-
-#%%
-ds = xr.open_dataset(outfile); ds.close(); print(ds); print(ds.ndvi)
-ds.close(outfile)
 # %%

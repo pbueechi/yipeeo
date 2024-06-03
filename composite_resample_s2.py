@@ -18,7 +18,7 @@ Some searches and ChatGPT (several re-questioning) hints the best observation fo
     ndvi: max
     evi: max
     ndwi: min
-    cloud cover: min
+    cloud cover: min %but the cloud cover value is not for field and is for whole scene (tile)
     nmdi: could not decide so taking median
 '''
 #%% import libraries
@@ -68,13 +68,15 @@ class resample_s2:
     """
     Get the best value composites from each variable
     """
-    def __init__(self, filename, sampling_rate = 10):
+    def __init__(self, filename, sampling_rate = 10, sgol_order = 3, sgol_len = 5):
         self.sampling_rate = sampling_rate
+        self.sgol_order = sgol_order
+        self.sgol_len = sgol_len
         self.ds = xr.open_dataset(filename)
         self.ds.close()
         self.ds_out = xr.Dataset()
     
-    def best_val(self, var, maxmin = None):
+    def best_val(self, var, maxmin = None, sgol_order = 3):
     #calculate either maximum of minimum based on input
         if maxmin == 'max':
             best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').max(skipna = True, keep_attrs = True)
@@ -89,7 +91,7 @@ class resample_s2:
         #interpolate nans
         best_var = best_var.interpolate_na(dim='time', method='linear')
         # apply sgolay
-        smoothed_data = savgol_filter(best_var.values, window_length=5, polyorder=3, axis=0)
+        smoothed_data = savgol_filter(best_var.values, window_length=self.sgol_len, polyorder=self.sgol_order, axis=0)
         best_var.values = smoothed_data
 
         self.ds_out[var] = best_var
@@ -98,7 +100,8 @@ class resample_s2:
     def save_dsout(self, outfile):
         self.ds_out.attrs.update(self.ds.attrs)
         self.ds_out.attrs['time stamp'] = 'The start date from when the aggregation began'
-        self.ds_out.attrs['aggregation'] = f'Aggregate with composite rule at {sampling_rate}-daily'
+        self.ds_out.attrs['aggregation'] = f'Aggregate with composite rule at {self.sampling_rate}-daily'
+        self.ds_out.attrs['smoothing'] = f'Smoothing with savitzky-golay filter at {self.sgol_len} window and {self.sgol_order} polynomial on resampled daily'
         self.ds_out.to_netcdf(outfile)
 
 # similarly for sentinel 1 data as well
@@ -127,6 +130,7 @@ class resample_s1:
         self.ds_out.attrs['composite rule'] = 'median'
         self.ds_out.attrs['time stamp'] = 'The start date from when the aggregation began'
         self.ds_out.attrs['aggregation'] = f'Aggregate with composite rule at {sampling_rate}-daily'
+        
         self.ds_out.to_netcdf(outfile)
 #%%
 #write function to feed into parallel process
@@ -157,7 +161,7 @@ def process_file_s1(file):
 #define the variables to be used for s2 sampling
 sampling_rate = 10 #in days
 vars = ['cloud_cover', 'ndvi', 'evi', 'ndwi', 'nmdi']
-maxmins = ['min', 'max', 'max', 'min', 'unknown']
+maxmins = ['min', 'max', 'max', 'min', 'median']
 var_maxmin_dict = dict(zip(vars, maxmins))
 # %% process s2
 
@@ -182,12 +186,12 @@ for folder in nc_directories:
         list(tqdm(pool.imap(process_file_s2, filelist), total = len(filelist)))
 
 # %% get s1 files
-s1_out_abs_path = os.path.join(out_parent_dir, s1_folder)
-if not os.path.exists(s1_out_abs_path):
-    os.makedirs(s1_out_abs_path)
-s1_filelist = sorted(glob.glob(os.path.join(s1_dir, 'ES*.nc')))
-#%% Process s1
-with Pool() as pool:
-    list(tqdm(pool.imap(process_file_s1, s1_filelist), total = len(s1_filelist)))
+# s1_out_abs_path = os.path.join(out_parent_dir, s1_folder)
+# if not os.path.exists(s1_out_abs_path):
+#     os.makedirs(s1_out_abs_path)
+# s1_filelist = sorted(glob.glob(os.path.join(s1_dir, 'ES*.nc')))
+# #%% Process s1
+# with Pool() as pool:
+#     list(tqdm(pool.imap(process_file_s1, s1_filelist), total = len(s1_filelist)))
 
 # %%

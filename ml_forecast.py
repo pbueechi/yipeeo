@@ -38,7 +38,7 @@ class nc2table:
     The Crop yield data and predictors are saved as nc files. This class extracts the predictors for the four months
     before harvest either in biweekly or monthly timesteps and saves them as csv files.
     """
-    def __init__(self, country, crop, yield_data_file, plant_date, harvest_date, farm=None): #harvest date as input
+    def __init__(self, country, crop, yield_data_file, harvest_date, farm=None): #harvest date as input
         """
         params: 
         country: string with names matching with the folder names and all
@@ -53,7 +53,7 @@ class nc2table:
         # Harvest dates in CZR around 25 July for winter wheat, 10 Oct for Maize, and 20 Jul Spring barley
         #self.harvest_date = {'common winter wheat': [7,25], 'grain maize and corn-cob-mix': [10,10], 'spring barley': [7,20]}   #ToDo: dont hardcode harvest dates
         self.harvest_date = harvest_date
-        self.plant_date = plant_date
+        #self.plant_date = plant_date
         self.crop_data = gpd.read_file(yield_data_file)
         self.lead_times = ['_LT4','_LT3','_LT2','_LT1']
         
@@ -140,6 +140,7 @@ class nc2table:
                 this_cols = [a for a in pipeline_df.columns if a.startswith(param)]
                 s2 = xr.open_dataset(os.path.join(pred_file_path, f'{field}.nc'))
                 veg_idx = s2[param].to_series()
+                # veg_idx_m = veg_idx.resample(temp_step).mean()
                 veg_idx_m = veg_idx.resample(temp_step).mean()
                 this_harvest_date = pd.to_datetime(f'{year}-{self.harvest_date[self.crop][0]}-{self.harvest_date[self.crop][1]-1}') #harvest date -2 days to make sure harvested field is not included
                 this_df = veg_idx_m[:this_harvest_date].tail(len(self.lead_times)+1)
@@ -687,7 +688,19 @@ class ml:
 
                 X, X_test = X.loc[:, selected_features], X_test.loc[:, selected_features]
                 # hp_tuned_vals = self.hyper_tune(lead_time=lead_time, model=model, selected_features=selected_features)
-                hp_tuned_vals = {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.3, 'colsample_bytree': 0.5}
+
+                if model=='XGB':
+                    hp_tuned_vals = {'max_depth': 3,
+                            'learning_rate': 0.3,
+                            'n_estimators': 500,
+                            'colsample_bytree': 0.5}
+
+                elif model=='RF':
+                    hp_tuned_vals = {'max_depth': 10,
+                            'min_samples_split': 5,
+                            'n_estimators': 100,
+                            'bootstrap': True}
+
                 estimator = self.get_default_regressions(model)
                 estimator.set_params(**hp_tuned_vals)
                 pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
@@ -979,55 +992,67 @@ crops = ['common winter wheat','grain maize and corn-cob-mix','winter barley']
 # crop_summary_stats()
 # plot_crop_summary()
 harvest_date = {'common winter wheat': [7,30],
-                'grain maize and corn-cob-mix': [11,15],
-                'winter barley': [7,15]}
+                'grain maize and corn-cob-mix': [11,30],
+                'winter barley': [7,30]}
 
 
 s1_file_path = os.path.join(parent_dir, 'Data', 'Predictors', 'eo_ts', 's1','daily')
-for yf in yield_fields:
-    yield_data_file = os.path.join(parent_dir, '07_data','Crop yield', 'Database', f'field_scale_{yf}.shp')
-    s2_file_path = os.path.join(parent_dir, 'Data', 'Predictors', 'eo_ts', 's2', 'Spain', yf, 'nc')
-    #ecostress_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 'ECOSTRESS')
 
-    #Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
-    pd.set_option('display.max_columns', 15)
-    warnings.filterwarnings('ignore')
-    start_pro = datetime.now()
+# for yf in yield_fields[:1]: #when : is used it is still a list
+yf = 'spain'
+yield_data_file = os.path.join(parent_dir, '07_data','Crop yield', 'Database', f'field_scale_{yf}.shp')
+# s2_file_path = os.path.join(parent_dir, 'Data', 'Predictors', 'eo_ts', 's2', 'Spain', yf, 'nc')
+s2_file_path = os.path.join(parent_dir, 'Data', 'Predictors', 'eo_ts', 's2', 'Spain')
+#ecostress_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 'ECOSTRESS')
 
-    #got general harvest data from external sources and picked up around 80th value of the range provided
-    #%%
-    for crop in crops:
-        a = nc2table(country='es', crop=crop, yield_data_file=yield_data_file, plant_date = None, harvest_date=harvest_date)
-        #country, crop, yield_data_file, plant_date, harvest_date, farm=None)
-        #a.resample_ecostress(temp_step='M')
-        a.resample_s1(s1_file_path, temp_step='M')
-        a.resample_s2(s2_file_path, temp_step='M')
-        a.previous_crop()
-        a.merge_s1_s2(temp_step='M')
-        #a.merge_all(temp_step='M')
-    #%%
-    # # Forecasting
-    for crop in crops:
-        a = ml(crop=crop, country='es', farm=None, temp_res='M')
-        
-        for model in ['XGB','RF']:
-            #a.runforecast_country(model=model, optimize=True)
-            a.s1_vs_s2(model=model)
+#Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
+pd.set_option('display.max_columns', 15)
+warnings.filterwarnings('ignore')
+#Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
+start_pro = datetime.now()
+print(f'Process for {yf} started at {start_pro}')
 
-            # a.s1_vs_s2_eco(model='XGB')
-            # a.plot_res(comp='eco')
-            # for country in ['ua', 'nl']:
-            #     a = ml(crop=crops[1], country=country, temp_res='M')
-            #     a.runforecast_country(model='RF', optimize=True)
+#got general harvest data from external sources and picked up around 80th value of the range provided
+##%%
+for crop in crops:
+    a = nc2table(country='es', crop=crop, yield_data_file=yield_data_file, harvest_date=harvest_date)
+    #country, crop, yield_data_file, plant_date, harvest_date, farm=None)
+    #a.resample_ecostress(temp_step='M')
+    a.resample_s1(s1_file_path, temp_step='M')
+    a.resample_s2(s2_file_path, temp_step='M')
+    a.previous_crop()
+    a.merge_s1_s2(temp_step='M')
+    #a.merge_all(temp_step='M')
 
-            for lead_time in [4,3,2,1]:
-                a.cross_cor_predictors(lt=lead_time)
-                a.feature_imp(lead_time=lead_time)
-                a.runforecast(lead_time=lead_time, model=model, feature_select=True, hyper_tune=True)
-                a.write_results(model = model)
-                a.plot_res()
-                a.runforecast_country(model=model, optimize=True)
-                #a.runforecast_loocv(lead_time=lead_time, preds=['sig40_vh','ndvi'])
+nc_pro = datetime.now()
+print(f'Process for {yf} nc2table finished at {nc_pro} which took {np.ceil((nc_pro - start_pro).seconds/60)} minutes')
+##%%
+# # Forecasting
+for crop in crops:
+    a = ml(crop=crop, country='es', farm=None, temp_res='M')
+    
+    for model in ['XGB','RF']:
+        #a.runforecast_country(model=model, optimize=True)
+        a.s1_vs_s2(model=model)
+
+        # a.s1_vs_s2_eco(model='XGB')
+        # a.plot_res(comp='eco')
+        # for country in ['ua', 'nl']:
+        #     a = ml(crop=crops[1], country=country, temp_res='M')
+        #     a.runforecast_country(model='RF', optimize=True)
+
+        for lead_time in [4,3,2,1]:
+            a.cross_cor_predictors(lt=lead_time)
+            a.feature_imp(lead_time=lead_time)
+        a.write_results(model = model)
+        #a.runforecast(lead_time=lead_time, model=model, feature_select=True, hyper_tune=True)
+        a.plot_res(model=model, comp='s1s2')
+        a.plot_res(model=model, comp='model_opt')
+        #a.runforecast_country(model=model, optimize=True)
+        #a.runforecast_loocv(lead_time=lead_time, preds=['sig40_vh','ndvi'])
+
+ml_pro = datetime.now()
+print(f'Process for {yf} nc2table finished at {ml_pro} which took {np.ceil((ml_pro - nc_pro).seconds/60)} minutes')
 # # for lead_time in [2,1]:
 # #     a = ml()
 #     # a.runforecast(country='cz',crop=crops[1], lead_time=lead_time)

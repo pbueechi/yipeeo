@@ -89,6 +89,9 @@ class resample_s2:
             best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').mean(skipna = True, keep_attrs = True)
             
         #interpolate nans
+        
+        best_var = best_var.ffill(dim = 'time')
+        best_var = best_var.bfill(dim = 'time')
         best_var = best_var.interpolate_na(dim='time', method='linear')
         # apply sgolay
         smoothed_data = savgol_filter(best_var.values, window_length=self.sgol_len, polyorder=self.sgol_order, axis=0)
@@ -122,6 +125,8 @@ class resample_s1:
         #print(f'Unknown compositing rule for {var}: Using mean')
         best_var = self.ds.resample(time = f'{self.sampling_rate}D').median(skipna = True, keep_attrs = True)
         #if some data missing apply linear interpolation
+        best_var = best_var.ffill(dim = 'time')
+        best_var = best_var.bfill(dim = 'time')
         best_var = best_var.interpolate_na(dim='time', method='linear')
         self.ds_out = best_var
 
@@ -145,6 +150,8 @@ def process_file_s2(file):
         resample_init.best_val(key, value)
     # Save resampled dataset
     resample_init.save_dsout(outfile)
+
+    return outfile
 #%%
 #write similar function for s1 as well
 def process_file_s1(file):
@@ -157,6 +164,7 @@ def process_file_s1(file):
     resample_init.best_val()
     # Save resampled dataset
     resample_init.save_dsout(outfile)
+
 #%%
 #define the variables to be used for s2 sampling
 sampling_rate = 10 #in days
@@ -180,18 +188,32 @@ for folder in nc_directories:
         os.makedirs(s2_out_abs_path)
     #get the list of all nc file in the input folder
     filelist = sorted(glob.glob(os.path.join(folder, '*.nc')))
-    #print(len(filelist))
+    print(len(filelist))
     #perform the task in parallel
     with Pool() as pool:
         list(tqdm(pool.imap(process_file_s2, filelist), total = len(filelist)))
 
 # %% get s1 files
-# s1_out_abs_path = os.path.join(out_parent_dir, s1_folder)
-# if not os.path.exists(s1_out_abs_path):
-#     os.makedirs(s1_out_abs_path)
-# s1_filelist = sorted(glob.glob(os.path.join(s1_dir, 'ES*.nc')))
-# #%% Process s1
-# with Pool() as pool:
-#     list(tqdm(pool.imap(process_file_s1, s1_filelist), total = len(s1_filelist)))
+s1_out_abs_path = os.path.join(out_parent_dir, s1_folder)
+if not os.path.exists(s1_out_abs_path):
+    os.makedirs(s1_out_abs_path)
+s1_filelist = sorted(glob.glob(os.path.join(s1_dir, 'ES*.nc')))
+#%% Process s1
+with Pool() as pool:
+    list(tqdm(pool.imap(process_file_s1, s1_filelist), total = len(s1_filelist)))
 
+# %%
+
+# infile = '/data/yipeeo_wd/07_data/Predictors/eo_ts/s2/Spain/lleida/nc/ES_8_2784618_9.nc'
+
+# dsin = xr.open_dataset(infile)
+# dsin.close()
+# evi_in = dsin.evi.values
+# evi_in_nan = np.where(np.isnan(evi_in))
+# #%%
+# out = process_file_s2(infile)
+# ds = xr.open_dataset(out)
+# ds.close()
+# evi_val = ds.evi.values
+# evi_nans = np.where(np.isnan(evi_val))
 # %%

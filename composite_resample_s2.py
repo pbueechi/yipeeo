@@ -68,7 +68,9 @@ class resample_s2:
     """
     Get the best value composites from each variable
     """
-    def __init__(self, filename, sampling_rate = 10, sgol_order = 3, sgol_len = 5):
+    def __init__(self, filename, sampling_rate = 10, sgol_order = 6, sgol_len = 9): 
+        ##first was len = 5 and order 3, later changed to len = 9 and order = 6 based on 
+        # https://www.nature.com/articles/s41597-021-01065-9#additional-information
         self.sampling_rate = sampling_rate
         self.sgol_order = sgol_order
         self.sgol_len = sgol_len
@@ -76,7 +78,7 @@ class resample_s2:
         self.ds.close()
         self.ds_out = xr.Dataset()
     
-    def best_val(self, var, maxmin = None, sgol_order = 3):
+    def best_val(self, var, maxmin = None):
     #calculate either maximum of minimum based on input
         if maxmin == 'max':
             best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').max(skipna = True, keep_attrs = True)

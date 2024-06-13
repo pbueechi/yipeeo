@@ -7,6 +7,11 @@
 Mamba Environment: climers
 '''
 #%%
+'''
+Checked manually the date extracted and found it did not give the kind of result I expected
+For example madrid ids 8681 to 8689 have winter barley in 2022 which is to be planted within nov-dec 2021
+but the plantation date for both seasons and also for 2021 second season is nowhere near that time frame 
+'''
 #import libraries
 import os
 import glob
@@ -17,24 +22,27 @@ import numpy as np
 import geopandas as gpd
 from rasterstats import zonal_stats
 from datetime import datetime, timedelta
-
-
+import pandas as pd
+from tqdm import tqdm
 #%%
+fields = ['madrid', 'lleida']
+field = fields[0]
 #set working directory so that data is downloaded where it should be
-wd = '/data/yipeeo_wd/Data/VPP_Wekeo'
+wd = f'/data/yipeeo_wd/Data/VPP_Wekeo/{field}'
 os.chdir(wd)
 #%%
 #list the variables to be separate files
 variables = ['SOSD', 'EOSD', 'QFLAG']
 yaers = list(range(2017, 2024))
+fillval = 32765
 seasons = [1,2]
 filelist_downloaded = glob.glob('*.tif') #in wd only
-yr = 2020; s = 1; var = 'QFLAG'
+yr = 2020; s = 1; var = 'SOSD'
 tile_files = glob.glob(f'VPP_{yr}_S2_T*-010m_V101_s{s}_{var}.tif')
 
-#%%
+# %%
 # for var in variables:
-#     for yr in yaers:
+#     for yr in tqdm(yaers):
 #         for s in seasons:
 #             # List all the tiles
 #             tile_files = glob.glob(f'VPP_{yr}_S2_T*-010m_V10*_s{s}_{var}.tif')
@@ -65,8 +73,28 @@ tile_files = glob.glob(f'VPP_{yr}_S2_T*-010m_V101_s{s}_{var}.tif')
 #             # show(mosaic, cmap='terrain')
 
 # %%
+#Define a function to convert yyddd format to days since 2000
+#This function is not 100% correct as it does not consider the leap year
+#But it is sufficient to do the zonal stats with DOY values
+#Will reverse the process to get the exact date after running zonal stat
+def yyddd_to_days_since_2000(yyddd_array, reference_date):#, filldate = 32765):
+    # if reference date is not in pandas convert it
+    reference_year = pd.Timestamp(reference_date).year #both string and datetime object is valid
+
+    # yyddd_array[np.isnan(yyddd_array)] = filldate
+    # Separate year and Julian day
+    years, days_of_year = np.divmod(yyddd_array, 1000)
+    #convert yy format to yyyy format by adding 2000 or 1900 conditionally
+    full_years = np.where(years < 50, 2000 + years, 1900 + years)
+    
+    # Calculate the difference in days from the reference date
+    days_since_2000 = (full_years - reference_year) * 365 + days_of_year
+    
+    return days_since_2000
+
 #Now use the QFLAG to signal less quality data as nans
-def mask_with_qc(flag_file, data_file, flag_thres):
+#At the same time convert yyddd to full days since 2000
+def mask_with_qc(flag_file, data_file, flag_thres, fillval, ref_date):
         
     # Open the quality flag file
     with rasterio.open(flag_file) as flag_src:
@@ -84,105 +112,109 @@ def mask_with_qc(flag_file, data_file, flag_thres):
     ds1 = np.float16(ds1)
     ds1[low_quality_mask] = np.nan
 
+    days_since_2000 = yyddd_to_days_since_2000(ds1, ref_date)
+    days_since_2000[np.isnan(days_since_2000)] = fillval #put back the fill value
+    days_since_2000 = days_since_2000.astype(np.int16)
     # Save the filtered dataset files
-    ds1_meta.update(dtype=rasterio.float32)  # Update metadata to match the new data type if necessary
+    ds1_meta.update(dtype=rasterio.int32, nodata = fillval)  # Update metadata to match the new data type if necessary
 
-    with rasterio.open(f'{data_file[:-4]}_flagged.tif', 'w', **ds1_meta) as dst1:
-        dst1.write(ds1, 1)
+    with rasterio.open(f'{data_file[:-4]}_flagged_converted.tif', 'w', **ds1_meta) as dst1:
+        dst1.write(days_since_2000, 1)
 
 # %%
 # flag_thres = 7
-# for yr in yaers:
+# fillval = 32765
+# for yr in tqdm(yaers):
 #     for s in seasons:
 #         # List all the tiles
 #         flag_file = glob.glob(f'VPP_{yr}_S2-010m*_s{s}_QFLAG_mosaic.tif')[0]
 #         sos_file = glob.glob(f'VPP_{yr}_S2-010m*_s{s}_SOSD_mosaic.tif')[0]
 #         eos_file = glob.glob(f'VPP_{yr}_S2-010m*_s{s}_EOSD_mosaic.tif')[0]
-#         mask_with_qc(flag_file, sos_file, flag_thres)
-#         mask_with_qc(flag_file, eos_file, flag_thres)
+#         mask_with_qc(flag_file, sos_file, flag_thres, fillval, '2000-01-01')
+#         mask_with_qc(flag_file, eos_file, flag_thres, fillval, '2000-01-01')
 #         print(flag_file)
 
-# %%
+#%%
 #Account for year not as numbers for zonal stat calculation
-
-
-def yyddd_to_days_since_2000(yyddd_array, reference_date, filldate = 32765):
-    # Define the reference date
-    reference_date = np.datetime64(reference_date)
-    yyddd_array[np.isnan(yyddd_array)] = filldate
-    # Separate year and Julian day
-    years, days_of_year = np.divmod(yyddd_array, 1000)
-    full_years = np.where(years < 50, 2000 + years, 1900 + years)
-    
-    # Create base dates for each year
-    base_dates = np.array(['{}-01-01'.format(year) for year in full_years], dtype='datetime64[D]')
-    
-    # Add the Julian day to the base dates
-    dates = base_dates + np.array(days_of_year - 1, dtype='timedelta64[D]')
-    
-    # Calculate the difference in days from the reference date
-    days_since_2000 = (dates - reference_date).astype('timedelta64[D]').astype(int)
-    
-    return days_since_2000
-#%%
-# Example usage
-yyddd_array = np.array([[17360, np.nan], [17250, 18120]])
-
-days_since_2000 = yyddd_to_days_since_2000(yyddd_array, '2000-01-01')
-print(days_since_2000)
-#%%
-
-# Function to convert raster data with NaN handling
-def convert_yyddd_raster(input_file, output_file, ref_date, nan_placeholder):
-    with rasterio.open(input_file) as src:
-        yyddd_data = src.read(1)
-        profile = src.profile
-
-        # Convert yyddd to days since reference date with NaN handling
-        days_data = np.vectorize(yyddd_to_days_since_reference)(yyddd_data, ref_date, nan_placeholder)
-
-        # Update profile for output
-        profile.update(dtype=rasterio.int32)  # Adjust dtype as necessary
-
-        with rasterio.open(output_file, 'w', **profile) as dst:
-            dst.write(days_data.astype(np.int32), 1)
-
-#%%
 # Function to convert days since reference date back to datetime
-def days_since_reference_to_datetime(days, ref_date, nan_placeholder):
-    if days == nan_placeholder:
-        return np.nan
-    return ref_date + timedelta(days=days)
+# def days_since_reference_to_datetime(days_since_2000, ref_date): #input will be a pandas series
+#     #extract year
+#     ref_year = [pd.Timestamp(ref_date).year]*len(days_since_2000)
+#     #reverse the days since 
+#     year, doy = np.divmod(days_since_2000 + ref_year * 365, 365)
+#     #convert to yyyyddd
+#     yyyyddd = year * 1000 + doy
 
-# Calculate zonal statistics and handle different years
-def zonal_stats_by_year(data_file, aoi, year, ref_date, nan_placeholder):
-    with rasterio.open(data_file) as src:
-        data = src.read(1)
-        # Convert days since reference date back to datetime
-        datetime_data = np.vectorize(days_since_reference_to_datetime)(data, ref_date, nan_placeholder)
+#     # if np.isnan(yyyyddd):
+#     #     return np.nan
+    
+#     yyyyddd[np.isnan(yyyyddd)] = 2099001
+#     #round up the doy, use ceil to avoid 0th day of year
+#     yyyyddd = np.int32(np.ceil(yyyyddd))
+#     yyyyddd = yyyyddd.astype(str)
 
-        # Filter data for the specific year
-        start_date = datetime(year, 1, 1)
-        end_date = datetime(year + 1, 1, 1)
-        year_data = np.where((datetime_data >= start_date) & (datetime_data < end_date), data, nan_placeholder)
+#     yyyyddd_pd = pd.Series(yyyyddd)
+#     yyyyddd_pd_dt = pd.to_datetime(yyyyddd_pd, format = '%Y%j')
+#     yyyyddd_pd_dt[yyyyddd_pd_dt > '2025-01-01'] = np.nan
 
-        stats = zonal_stats(aoi, year_data, stats=['mean'], nodata=nan_placeholder)
-    return stats
+#     return yyyyddd_pd_dt.to_numpy()
 #%%
-# Convert your data files
-# Define a reference date
-reference_date = datetime(2000, 1, 1)
-nan_placeholder = -999
-convert_yyddd_raster(sos_file, 'delete_this.tif', reference_date, nan_placeholder)
-# convert_yyddd_raster('path/to/your_data_file_2.tif', 'path/to/converted_data_file_2.tif', reference_date)
+def days_to_datestr(days_since_2000, ref_date = '2000-01-01'): #input will be a pandas series
+    #extract year
+    if days_since_2000 is None:
+        date_str = None
+        return date_str
+    
+    ref_year = pd.Timestamp(ref_date).year
+    #reverse the days since 
+    year, doy = np.divmod(days_since_2000 + ref_year * 365, 365)
+    if doy <1:
+        doy = 1 #even when I used ceil, it had some 0s 
+    #convert to yyyyddd
+    yyyyddd = year * 1000 + doy
+
+    # if np.isnan(yyyyddd):
+    #     return np.nan
+    
+    # yyyyddd[np.isnan(yyyyddd)] = 2099001
+    #round up the doy, use ceil to avoid 0th day of year
+    yyyyddd = np.int32(np.ceil(yyyyddd))
+    yyyyddd = yyyyddd.astype(str)
+    date_dt = datetime.strptime(yyyyddd, '%Y%j')
+    date_str = datetime.strftime(date_dt, '%Y-%m-%d')
+
+    return date_str
+
+
 #%%
+# # Example usage
+# yyddd_array = np.array([[17360, np.nan], [17250, 18120]])
 
-# Example usage for 2017 and 2018
-stats_2017 = zonal_stats_by_year('path/to/converted_data_file_1.tif', aoi, 2017, reference_date)
-stats_2018 = zonal_stats_by_year('path/to/converted_data_file_2.tif', aoi, 2018, reference_date)
+# days_since_2000 = yyddd_to_days_since_2000(yyddd_array, '2000-01-01')
+# print(days_since_2000)
 
-print('Zonal stats for 2017:', stats_2017)
-print('Zonal stats for 2018:', stats_2018)
+#%%
+# days_since_2000_pd = pd.DataFrame(days_since_2000.flatten(), columns=['output'])
+# dt = days_since_reference_to_datetime(days_since_2000_pd['output'], '2000-01-01')
 
-# Load your area of interest (AOI) shapefile
-aoi = gpd.read_file('path/to/your_aoi.shp')
+#%%
+shapefile = f'/data/yipeeo_wd/07_data/Crop yield/Database/field_scale_{field}_epsg32630.shp'
+shpgpd = gpd.read_file(shapefile)
+#%%
+for yr in tqdm(yaers[4:]):
+    for var in variables[:2]: #not QFLAG
+        for s in seasons:
+                        
+            filelist = glob.glob(os.path.join(wd, f'VPP_{yr}_S2-*_s{s}_{var}_mosaic_flagged_converted.tif'))
+            data_file = filelist[0]
+            stat_mean = zonal_stats(shapefile, data_file, stats = ['mean'], all_touched = True, nodata = fillval)
+            
+            stat_mean_val = [days_to_datestr(i['mean']) for i in stat_mean]
+            # stat_date = days_to_datestr(stat_mean_val, '2000')
+            
+            shpgpd[f'{var[:1]}_{yr}_s{s}'] = stat_mean_val
+# %%
+basename = os.path.basename(shapefile)
+outfile = os.path.join(wd, f'{basename[:-4]}_soseos.shp')
+shpgpd.to_file(outfile)
+# %%

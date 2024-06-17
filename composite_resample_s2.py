@@ -78,20 +78,47 @@ class resample_s2:
         self.ds.close()
         self.ds_out = xr.Dataset()
     
-    def best_val(self, var, maxmin = None):
-    #calculate either maximum of minimum based on input
+    def best_val_year(self, ds, var, maxmin = None):
+        #calculate either maximum of minimum based on input
+        # if maxmin == 'max':
+        #     best_var = self.ds[var].sel(time = slice(f'{year}-01-01',f'{year}-12-31')).resample(time = f'{self.sampling_rate}D').max(skipna = True, keep_attrs = True)
+        # elif maxmin == 'min':
+        #     best_var = self.ds[var].sel(time = slice(f'{year}-01-01',f'{year}-12-31')).resample(time = f'{self.sampling_rate}D').min(skipna = True, keep_attrs = True)
+        # elif maxmin == 'median':
+        #     best_var = self.ds[var].sel(time = slice(f'{year}-01-01',f'{year}-12-31')).resample(time = f'{self.sampling_rate}D').median(skipna = True, keep_attrs = True)
+        # else:
+        #     #print(f'Unknown compositing rule for {var}: Using mean')
+        #     best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').mean(skipna = True, keep_attrs = True)
+        # return best_var
+        sampling_rate = self.sampling_rate
         if maxmin == 'max':
-            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').max(skipna = True, keep_attrs = True)
+            best_var = ds[var].resample(time = f'{sampling_rate}D').max(skipna = True, keep_attrs = True)
         elif maxmin == 'min':
-            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').min(skipna = True, keep_attrs = True)
+            best_var = ds[var].resample(time = f'{sampling_rate}D').min(skipna = True, keep_attrs = True)
         elif maxmin == 'median':
-            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').median(skipna = True, keep_attrs = True)
+            best_var = ds[var].resample(time = f'{sampling_rate}D').median(skipna = True, keep_attrs = True)
         else:
             #print(f'Unknown compositing rule for {var}: Using mean')
-            best_var = self.ds[var].resample(time = f'{self.sampling_rate}D').mean(skipna = True, keep_attrs = True)
-            
+            best_var = ds[var].resample(time = f'{sampling_rate}D').mean(skipna = True, keep_attrs = True)
+        return best_var
+    
+    def best_val(self, var, maxmin = None):
+        #first of all get the list of all the years and iterate through it
+        # def process_year(group):
+        #     return self.best_val_year(group, var = var, maxmin = maxmin)
+        # best_var = self.ds[var].groupby('time.year').map(process_year)
+
+        #I tried to use map function to process each year but did not work at all
+        #It always threw an error "KeyError: 'cloud_cover" although it is there
+        #So I resorted to loopin through the group
+        grouped = self.ds.groupby('time.year')
+        resampled_collection = []
+        for yr, group in grouped:
+            resampled_year = self.best_val_year(group, var, maxmin)
+            resampled_collection.append(resampled_year)
+
+        best_var = xr.concat(resampled_collection, dim='time')
         #interpolate nans
-        
         best_var = best_var.ffill(dim = 'time')
         best_var = best_var.bfill(dim = 'time')
         best_var = best_var.interpolate_na(dim='time', method='linear')
@@ -108,7 +135,7 @@ class resample_s2:
         self.ds_out.attrs['aggregation'] = f'Aggregate with composite rule at {self.sampling_rate}-daily'
         self.ds_out.attrs['smoothing'] = f'Smoothing with savitzky-golay filter at {self.sgol_len} window and {self.sgol_order} polynomial on resampled daily'
         self.ds_out.to_netcdf(outfile)
-
+#%%
 # similarly for sentinel 1 data as well
 #define a function to resample the data based on time aggregation
 #since best value is same median for all the variables the function is shorter
@@ -122,10 +149,19 @@ class resample_s1:
         self.ds.close()
         #self.ds_out = xr.Dataset()
 
+    def best_val_year(self, ds, sampling_rate = 10):
+        sampling_rate = self.sampling_rate
+        best_var = ds.resample(time = f'{sampling_rate}D').median(skipna = True, keep_attrs = True)
+        return best_var
+        
     def best_val(self):
     #calculate either maximum of minimum based on input
         #print(f'Unknown compositing rule for {var}: Using mean')
-        best_var = self.ds.resample(time = f'{self.sampling_rate}D').median(skipna = True, keep_attrs = True)
+        def process_year(group):
+            return self.best_val_year(ds = group, sampling_rate=self.sampling_rate)
+        
+        best_var = self.ds.groupby('time.year').map(process_year)
+
         #if some data missing apply linear interpolation
         best_var = best_var.ffill(dim = 'time')
         best_var = best_var.bfill(dim = 'time')
@@ -147,6 +183,11 @@ def process_file_s2(file):
     outfile = os.path.join(s2_out_abs_path, basename)
     # Initialize resample object
     resample_init = resample_s2(file, sampling_rate)
+
+    vars = ['cloud_cover', 'ndvi', 'evi', 'ndwi', 'nmdi']
+    maxmins = ['min', 'max', 'max', 'min', 'median']
+    var_maxmin_dict = dict(zip(vars, maxmins))
+
     # Perform resampling for each variable
     for key, value in var_maxmin_dict.items():
         resample_init.best_val(key, value)
@@ -205,17 +246,12 @@ with Pool() as pool:
     list(tqdm(pool.imap(process_file_s1, s1_filelist), total = len(s1_filelist)))
 
 # %%
-
-# infile = '/data/yipeeo_wd/07_data/Predictors/eo_ts/s2/Spain/lleida/nc/ES_8_2784618_9.nc'
-
-# dsin = xr.open_dataset(infile)
-# dsin.close()
-# evi_in = dsin.evi.values
-# evi_in_nan = np.where(np.isnan(evi_in))
+# # %%
+# file1 = s1_filelist[0]
+# file2 = filelist[0]
 # #%%
-# out = process_file_s2(infile)
-# ds = xr.open_dataset(out)
-# ds.close()
-# evi_val = ds.evi.values
-# evi_nans = np.where(np.isnan(evi_val))
+# sampling_rate = 10
+# process_file_s1(file1)
+# #%%
+# process_file_s2(file2)
 # %%

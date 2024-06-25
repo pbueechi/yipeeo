@@ -38,16 +38,32 @@ class anomaly_calulation:
         self.ds.close()
 
     def calc_mean(self):
+        #just groupby and take mean while skipping nans
         ds_mean = self.ds.groupby('time.dayofyear').mean(skipna = True)
         return ds_mean
 
     def calc_anomaly(self):
-        ds_mean = self.calc_mean()
+        ds_mean = self.calc_mean() #get means
+        #get how many times the data has to be repeated (full-year only)
+        rep = len(np.unique(self.ds['time.year']))
+        #initialize the anomaly dataset by original dataset
+        #then replace  the values with calculated anomalies
+        ds_anomaly = self.ds.copy()
 
-        anomaly = self.ds.values - self.calc_mean()
-        ds_anomaly = self.ds.copy() #should copy the attributes as well
-        ds_anomaly.values = anomaly
-        self.ds_anomaly = anomaly
+        for var in ds_mean.data_vars:
+            if var == 'cloud_cover':
+                continue
+            #get only data as numpy array
+            var_mean = ds_mean[var].data
+            #repeat the mean for each year tlo match timeseries dimension
+            var_mean_tile = np.tile(var_mean, rep)
+            #calculate the difference
+            var_anomaly = self.ds[var].data - var_mean_tile
+            #save it to anomaly dataset
+            ds_anomaly[var].data = var_anomaly
+        
+        # ds_anomaly.attrs['anomaly'] = 'Anomalies from  {rep} years" mean, anomalies invalid for cloud cover'
+        self.ds_anomaly = ds_anomaly
 
     def save_out(self, outfile = None):
         if outfile is None:
@@ -56,13 +72,14 @@ class anomaly_calulation:
             # name, ext = os.path.splitext(basename)
             outfile = os.path.join(pathdir, 'anomalies', basename)
 
-        self.ds_anomaly.attrs['anomaly'] = f'Anomaly from long term mean at that day of year'
+        self.ds_anomaly.attrs['anomaly'] = f'Anomaly from long term mean at that day of year except for cloud cover'
         self.ds_anomaly.to_netcdf(outfile)
 
-    def process_file(self, outfile = None):
-        self.calc_anomaly()
-        self.save_out(outfile)
-        return outfile
+#initially process file was within the class 
+def process_file(infile, outfile = None):
+    self = anomaly_calulation(infile)
+    self.calc_anomaly()
+    self.save_out(outfile)
 
 # def process_monthfile(file):
 #     file_lib = pathlib.Path(file)
@@ -96,13 +113,35 @@ s2_file_path = os.path.join(parent_dir, 'Data', 'Predictors', 'eo_ts', 's2', 'Sp
 #Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
 pd.set_option('display.max_columns', 15)
 warnings.filterwarnings('ignore')
-#Later: deep learn, ECOSTRESS, other numbers of features for FS-> self optimize number of features
-start_pro = datetime.datetime.now()
-print(f'Process for {yf} started at {start_pro}')
+
 # %%
 s2_filelist = glob.glob(os.path.join(s2_file_path,'*.nc'))
-s2_file = s2_filelist[0]
+# s2_file = s2_filelist[0]
 #%%
-s2_init = anomaly_calulation(s2_file)
-s2_mean = s2_init.calc_mean()
+# s2_init = anomaly_calulation(s2_file)
+# s2_mean = s2_init.calc_mean()
+# s2_init.calc_anomaly()
+# print(s2_init.ds_anomaly)
 # %%
+# for dv in s2_mean.data_vars:
+#     s2_data = s2_mean[dv].data
+#     s2_data_tile = np.tile(s2_data, 1)
+#     s2_ana = s2_init.ds[dv].data - s2_data_tile
+# # %%
+# s2_ana_ds = s2_init.ds.copy()
+# s2_ana_ds[dv].data = s2_ana
+# %%
+# f = '/data/yipeeo_wd/Data/Predictors/eo_ts/s2/Spain/spain/ES_8_3254621_35.nc'
+# with xr.open_dataset(f) as ds:
+#     print(ds)
+#     plt.plot(ds['ndvi'].data)
+# %%
+start_pro = datetime.datetime.now()
+print(f'Process started at {start_pro}')
+
+with Pool() as pool:
+    list(tqdm(pool.imap(process_file, s2_filelist), total = len(s2_filelist)))
+
+stop_pro = datetime.datetime.now()
+print(f'Process finished at {stop_pro}')
+print(f'Processing took {(stop_pro - start_pro).seconds} seconds')

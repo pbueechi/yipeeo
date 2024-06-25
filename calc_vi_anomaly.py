@@ -90,7 +90,6 @@ yield_fields = ['madrid', 'lleida']
 # for yf in yield_fields[:1]: #when : is used it is still a list
 yf = 'spain'
 yield_data_file = os.path.join(parent_dir, '07_data','Crop yield', 'Database', f'field_scale_{yf}.shp')
-s1_file_path = os.path.join(parent_dir, 'Data', 'Predictors', 'eo_ts', 's1', 'daily')
 s2_file_path = os.path.join(parent_dir, 'Data', 'Predictors', 'eo_ts', 's2', 'Spain', 'spain')
 #ecostress_file_path = os.path.join(parent_dir, 'Predictors', 'eo_ts', 'ECOSTRESS')
 
@@ -101,14 +100,9 @@ warnings.filterwarnings('ignore')
 start_pro = datetime.datetime.now()
 print(f'Process for {yf} started at {start_pro}')
 # %%
-s1_filelist = glob.glob(os.path.join(s1_file_path,'*cr_agg_10-day.nc'))
 s2_filelist = glob.glob(os.path.join(s2_file_path,'*.nc'))
-
-s1_file = s1_filelist[0]
 s2_file = s2_filelist[0]
 #%%
-s1_init = anomaly_calulation(s1_file)
-s1_mean = s1_init.calc_mean()
 s2_init = anomaly_calulation(s2_file)
 s2_mean = s2_init.calc_mean()
 # %%

@@ -98,12 +98,125 @@ def ukr2shape():
     gdf.to_file(r'M:\Projects\YIPEEO\07_data\Crop yield\Ukraine\Subfield\soybean_wgs84.shp')
     # print(gdf)
 
+def ukr_reg():
+    path_data = r'M:\Projects\YIPEEO\07_data\Crop yield\Ukraine\regional\NUTS3_Ukraine_corr.csv'
+    path_shp = r'M:\Projects\YIPEEO\07_data\Crop yield\Ukraine\regional\ukr_admbnda_adm1_sspe_20230201.shp'
+    data_file = pd.read_csv(path_data, decimal=',', sep=';', index_col=0)
+    cols = data_file.columns
+    crops = ['corn grain', 'wheat', 'barley']
+    crop = crops[2]
+    col_crop = [col for col in cols if col.endswith(crop)]
+    crop_file = data_file.loc[:,col_crop]
+    plt.plot(range(2017,2023), crop_file.loc['Ukraine', :]-np.mean(crop_file.loc['Ukraine', :]))
+    plt.plot(range(2017, 2023), crop_file.loc['Khersonska', :]-np.mean(crop_file.loc['Khersonska',:]))
+    plt.plot(range(2017, 2023), crop_file.loc['Luhanska', :]-np.mean(crop_file.loc['Luhanska',:]))
+    plt.plot(range(2017, 2023), crop_file.loc['Donetska', :]-np.mean(crop_file.loc['Donetska',:]))
+    plt.grid(linestyle="--", alpha=0.5, zorder=1)
+    plt.legend(['Ukraine_mean', 'Kherson', 'Luhansk', 'Donetska'])
+    plt.xlabel('Year')
+    plt.ylabel('Yield [dt/ha]')
+    plt.title(crop)
+    plt.show()
+    print(crop_file)
+    # plt.savefig(f'Figures/Ukraine/yield_{crop}_anom.png', dpi=300)
+
+    # shp = gpd.read_file(path_shp)
+    # # print(shp)
+    # # print(data_file)
+    # cols = data_file.columns
+    # # for crop in ['crop grain','wheat', 'barley']:
+    # for crop in ['corn grain']:
+    #     col_crop = [col for col in cols if col.endswith(crop)]
+    #     new_shp = shp.copy()
+    #     print(new_shp)
+    #     print(col_crop)
+
+def eu_tab2shp():
+    crop_o = pd.read_csv(r'D:\DATA\yipeeo\Crop_data\Crop_yield\Regional_csv\Joint_DB_Clim4Cast.csv', sep=';')
+    nuts_file_path = 'D:/DATA/yipeeo/SC2/Crop yield/All_NUTS.shp'
+    shape = gpd.read_file(nuts_file_path)
+    years = [str(a) for a in range(2000, 2023)]
+    df = pd.DataFrame(index=np.unique(shape.g_id), columns=years)
+    for crop in ['Maize', 'Winter Wheat', 'Spring Barley']:
+        df_crop = crop_o.iloc[np.where(crop_o.Crop_type==crop)[0],:]
+        df_crop.index = range(len(df_crop.index))
+        for i in range(len(df_crop.index)):
+            this_ind = np.where(df.index==df_crop.Region_id[i])[0]
+            if len(this_ind)==1:
+                if (crop=='Spring Barley') and (df_crop.Region_id[i].startswith('DE')):
+                    df.iloc[this_ind,:] = df_crop.iloc[i, 3:]/10
+                else:
+                    df.iloc[this_ind,:] = df_crop.iloc[i, 3:]
+
+        df.to_csv(rf'D:\DATA\yipeeo\Crop_data\Crop_yield\Regional_csv\ALL_{crop}_test.csv')
+
+def eu_tab_fr():
+    shape_path = r'M:\Projects\YIPEEO\07_data\Crop yield\France'
+
+    crops = ['Maize', 'Spring Barley', 'Winter Wheat']
+    for crop in crops:
+        orig = pd.read_csv(rf'D:\DATA\yipeeo\Crop_data\Crop_yield\Regional_csv\ALL_{crop}_test.csv', index_col=0)
+        fra = gpd.read_file(os.path.join(shape_path, f'nuts_fr_{crop}.shp'))
+        fra_df = fra.iloc[:,-20:-1]
+        fra_df.index = fra.loc[:, 'NUTS_ID']
+        for inds in fra_df.index:
+            if inds in orig.index:
+                orig.loc[inds,[str(a) for a in range(2000,2019)]] = fra_df.loc[inds, :]
+
+        orig.to_csv(rf'D:\DATA\yipeeo\Crop_data\Crop_yield\Regional_csv\ALL_{crop}_FRA.csv')
+
+def eu_tab_hu():
+    pass
+
+
+
+        # df.to_csv(f'Data/M/EU/yields_{crop}.csv', index=True)
+    # yield_path_wheat = {'AT': [6, 31], 'CZ': [7, 16], 'DE': [7, 16], 'FR': [7, 11], 'HR': [6, 31],
+    #                       'HU': [6, 31], 'PL': [7, 16], 'SI': [7, 16], 'SK': [7, 16], 'UA': [7, 16]}
+
+
+def merge_hu():
+    path_csv = r'D:\DATA\yipeeo\Crop_data\Crop_yield\Regional_csv'
+    path_shp = r'D:\DATA\yipeeo\Crop_data\NUTS_data\hut_nuts3.shp'
+    shp = gpd.read_file(path_shp)
+    hu_files = ['HU_spring_barley.csv', 'HU_winter_wheat.csv']
+    crop_conv = {'maize': 'grain maize and corn-cob-mix', 'spring_barley': 'spring barley',
+             'winter_wheat': 'common wheat and spelt'}
+    for file in hu_files:
+        a = pd.read_csv(os.path.join(path_csv, file), decimal=',', index_col=0)
+        for year in (range(2016, 2023)):
+            a.loc[:,str(year)] = [np.nan]*len(a.index)
+        crop = file.split('.')[0][3:]
+        crop_type = crop_conv[crop]
+        crop_df = shp.iloc[np.where(shp.crop_type==crop_type)[0],[1,2,7]]
+        crop_df.index = range(len(crop_df.index))
+        for i in crop_df.index:
+            a.loc[crop_df.iloc[i, 0], crop_df.iloc[i, 1]] = crop_df.iloc[i, 2]
+
+        a.to_csv(os.path.join(path_csv, file.split('.')[0]+'_new.csv'), index=True)
+
+def ukr2crop():
+    path = r'M:\Projects\YIPEEO\07_data\Crop yield\Ukraine\regional\NUTS3_Ukraine.csv'
+    file = pd.read_csv(path, sep=';', decimal=',')
+    crops = np.unique([a[5:] for a in file.columns[2:]])
+    for crop in crops:
+        inds = [a for a in file.columns if a.endswith((crop, 'Regions', 'Region_ID'))]
+        this_crop = file.loc[:,inds]
+        this_crop.columns = [a.replace(f'_{crop}','') for a in this_crop.columns]
+        this_crop.to_csv(rf'M:\Projects\YIPEEO\07_data\Crop yield\Ukraine\regional\UA_{crop}.csv', index=False)
 
 if __name__ == '__main__':
+    # pd.set_option('display.max_rows', None)
+    # eu_tab2shp()
+    eu_tab_fr()
+    # ukr2crop()
+    # merge_hu()
     # a = france_data(r'D:\DATA\yipeeo\NUTS_data')
+
     # b = austria_data()
-    c = crop_data(country='austria')
-    c.add_yield()
+    # c = crop_data(country='austria')
+    # c.add_yield()
+    # ukr_reg()
     # a.select_country()
     # pd.set_option('display.max_columns', None)
     # b.add_yield()

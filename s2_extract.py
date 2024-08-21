@@ -4,6 +4,8 @@ import pystac_client
 import planetary_computer
 import rasterio
 import csv
+import time
+import traceback
 import warnings
 import glob
 import cProfile
@@ -12,9 +14,10 @@ import pandas as pd
 import geopandas as gpd
 import multiprocessing as mp
 import xarray as xr
+import matplotlib.pyplot as plt
 from scipy import stats as st
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from rasterio.mask import mask
 from pystac.extensions.eo import EOExtension as eo
 
@@ -25,8 +28,8 @@ class s2:
     """
     # ToDo: There are several ways to save some computation time. First, change bands to the second list below.
     #  Afterwards, self.time_of_interest can be adjusted in def __init__
-    bands = ['B02','B03','B04','B05','B06','B07','B08','B8A','B11','B12','SCL']
-    # bands = ['B02','B04','B08','B11','B12','SCL']
+    # bands = ['B02','B03','B04','B05','B06','B07','B08','B8A','B11','B12','SCL']
+    bands = ['B02','B04','B08','B11','B12','SCL']
 
     def __init__(self, region, year, crop):
         """
@@ -36,20 +39,25 @@ class s2:
         self.crop = crop
         self.year = year
         #ToDo Replace the two following links with where the output should be stored and the link to the shapefile with the fields
-        self.table_path = 'D:/data-write/YIPEEO/predictors/S2_L2A/ts'
-        self.fields = gpd.read_file(f'D:/DATA/yipeeo/Crop_data/Crop_class/{region}/nuts/{crop}_{year}.shp')
+
+        # self.table_path = 'D:/data-write/YIPEEO/predictors/S2_L2A/ts'
+        self.table_path = r'D:\DATA\yipeeo\Predictors\S2_L2A'
+        self.fields = gpd.read_file(f'D:/DATA/yipeeo/Crop_data/Crop_class/{region}/subsample_200/{crop}_{year}.shp')
         self.fields = self.fields.set_crs(epsg=4326)
         self.csv_path = os.path.join(self.table_path, region, crop, str(year))
         if not os.path.exists(self.csv_path): os.makedirs(self.csv_path)
         self.fields = self.fields.drop_duplicates(subset='FS_KENNUNG')
         self.row_head = ['observation', 'cloud_cover[%]'] + [int(i) for i in list(self.fields.FS_KENNUNG.values)]
+        #ToDo Done adjusted this
+        if region=='Czechia':
+            self.row_head = ['observation', 'cloud_cover[%]'] + list(self.fields.FS_KENNUNG.values)
         self.time_of_interest = f'{self.year}-01-01/{self.year}-10-31'
         # Maize efficient version
         # time_of_interest = f'{self.year}-04-01/{self.year}-10-31'
         # wheat, spring barley efficient version
         # time_of_interest = f'{self.year}-01-01/{self.year}-07-31'
 
-    def extract_s2(self, items, core=None):
+    def extract_s2(self, items, core):
         """
         :param items: list of s2 images as returned from self.find_s2_items
         :param core: int number of core on which code is run. if not parallelized use None
@@ -57,52 +65,69 @@ class s2:
         :return: writes csv files with the s2 information per band and core
         """
         # Start looping through all S-2 scenes and defined S-2 bands
+
+        errors = []
         for it_num, item in enumerate(items):
-            print(f'done: {it_num}/{len(items)} from {item.datetime.date()} at {datetime.now()}')
-            signed_item = planetary_computer.sign(item)
+            try:
+                print(f'done: {core} {it_num}/{len(items)} from {item.datetime.date()} at {datetime.now()}')
+                signed_item = planetary_computer.sign(item)
 
-            # Define extent of current scene and reduce fields to the ones in this extent
-            exts = pd.DataFrame(item.geometry['coordinates'][0], columns=['x', 'y'])
-            xmin, ymin, xmax, ymax = exts.min(axis=0).x, exts.min(axis=0).y, exts.max(axis=0).x, exts.max(axis=0).y
-            used_fields = self.fields.clip(mask=[xmin, ymin, xmax, ymax])
-            for band in self.__class__.bands:
-                # Load S2 scenes
-                src = rasterio.open(signed_item.assets[band].href)
-                fields = used_fields.to_crs(src.crs)
-                # Per scene and band extract and summarize the information per field
-                fields_data = pd.DataFrame(data=None, index=range(2), columns=self.row_head)
-                fields_data.iloc[:, 0] = [f'{item.datetime.date()}_median', f'{item.datetime.date()}_std']
-                fields_data.iloc[:, 1] = [eo.ext(item).cloud_cover, eo.ext(item).cloud_cover]
+                # Define extent of current scene and reduce fields to the ones in this extent
+                exts = pd.DataFrame(item.geometry['coordinates'][0], columns=['x', 'y'])
+                xmin, ymin, xmax, ymax = exts.min(axis=0).x, exts.min(axis=0).y, exts.max(axis=0).x, exts.max(axis=0).y
+                used_fields = self.fields.clip(mask=[xmin, ymin, xmax, ymax])
+                for band in self.__class__.bands:
+                    # Load S2 scenes
+                    src = rasterio.open(signed_item.assets[band].href)
+                    fields = used_fields.to_crs(src.crs)
+                    # Per scene and band extract and summarize the information per field
+                    fields_data = pd.DataFrame(data=None, index=range(2), columns=self.row_head)
+                    fields_data.iloc[:, 0] = [f'{item.datetime.date()}_median', f'{item.datetime.date()}_std']
+                    fields_data.iloc[:, 1] = [eo.ext(item).cloud_cover, eo.ext(item).cloud_cover]
 
-                if core:
-                    file_path = os.path.join(self.csv_path, f'run_{band}_{core}.csv')
-                else:
-                    file_path = os.path.join(self.csv_path, f'run_{band}_all.csv')
+                    if not core is None:
+                        file_path = os.path.join(self.csv_path, f'run_{band}_{core}.csv')
+                    else:
+                        file_path = os.path.join(self.csv_path, f'run_{band}_all.csv')
 
-                for ipol in range(len(fields)):
-                    polygon = fields[ipol:ipol + 1]
-                    try:
-                        out_image, out_transform = mask(src, polygon.geometry, crop=True)
-                        out_image = np.where(out_image == 0, np.nan, out_image)
-                        if np.isnan(out_image).all():
-                            fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nan, np.nan]
-                        else:
-                            if band == 'SCL':
-                                arr_flat = out_image.flatten()
-                                arr_flat = arr_flat[~np.isnan(arr_flat)]
-                                fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [int(st.mode(arr_flat)[0][0]),
-                                                                                  np.nanstd(out_image)]
+                    for ipol in range(len(fields)):
+                        polygon = fields[ipol:ipol + 1]
+                        try:
+                            out_image, out_transform = mask(src, polygon.geometry, crop=True)
+                            out_image = np.where(out_image == 0, np.nan, out_image)
+                            if np.isnan(out_image).all():
+                                fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nan, np.nan]
                             else:
-                                fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nanmedian(out_image),
-                                                                                  np.nanstd(out_image)]
-                    except:
-                        fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nan, np.nan]
-                with open(file_path, 'a') as f1:
-                    writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
-                    writer.writerow(list(fields_data.iloc[0, :]))
-                    writer.writerow(list(fields_data.iloc[1, :]))
-                src.close()
-                gc.collect()
+                                if band == 'SCL':
+                                    arr_flat = out_image.flatten()
+                                    arr_flat = arr_flat[~np.isnan(arr_flat)]
+                                    fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [int(st.mode(arr_flat)[0][0]),
+                                                                                      np.nanstd(out_image)]
+                                else:
+                                    fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nanmedian(out_image),
+                                                                                      np.nanstd(out_image)]
+                        except:
+                            fields_data.loc[:, polygon.FS_KENNUNG.values[0]] = [np.nan, np.nan]
+                    with open(file_path, 'a') as f1:
+                        writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
+                        writer.writerow(list(fields_data.iloc[0, :]))
+                        writer.writerow(list(fields_data.iloc[1, :]))
+                    src.close()
+                    gc.collect()
+            except Exception as e:
+                errors.append(e)
+                traceback.print_exc()
+
+        result = None
+        for res in errors:
+            if (isinstance(res, rasterio.errors.RasterioIOError) and str(res)=="HTTP response code: 403"):
+                # planetary computer access error 403
+                result = "restart"
+                break
+            else:
+                result = "error"
+
+        return result
 
     def find_s2_items(self):
         """
@@ -148,13 +173,15 @@ class s2:
 
         for collection in self.__class__.bands:
             for i in range(n_cores):
-                if n_cores==1:
+                if n_cores == 1:
                     file_path = os.path.join(self.csv_path, f'run_{collection}_all.csv')
                 else:
                     file_path = os.path.join(self.csv_path, f'run_{collection}_{i}.csv')
-                with open(file_path, 'w') as f1:
-                    writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
-                    writer.writerow(self.row_head)
+
+                if not os.path.exists(file_path):
+                    with open(file_path, 'w') as f1:
+                        writer = csv.writer(f1, delimiter=',', lineterminator='\n', )
+                        writer.writerow(self.row_head)
 
     def find_existing(self, search_s2, core=None):
         """
@@ -164,9 +191,9 @@ class s2:
         :param core: int for on which CPU core the processing is done
         :return: two updated lists of search_lst and search_geo including all files that do not have results yet.
         """
-        done_files_path = os.path.join(self.csv_path, 'run_SCL_all.csv')
-        if core:
-            done_files_path = os.path.join(self.csv_path, f'run_SCL_{core}.csv')
+        done_files_path = os.path.join(self.csv_path, 'run_B02_all.csv')
+        if not core is None:
+            done_files_path = os.path.join(self.csv_path, f'run_B02_{core}.csv')
         done_files = pd.read_csv(done_files_path, index_col=0)
         done_dates = [a.split('_')[0].replace('-','') for a in done_files.index]
         search_s2_new = []
@@ -177,27 +204,61 @@ class s2:
                 search_s2_new.append(search_s2[i])
         return search_s2_new
 
-    def run_extraction(self, n_cores=4, new=False):
+    def run_extraction(self, n_cores=4):
         """
         :param n_cores: int number of cores on which parallel computation should be done
         :param new: boolean. True if the calculation starts. False, if calculation was interrupted and needs to be continued
         :return: runs the function self.extract_s2 in parallel.
         """
-        if new:
-            self.createcsv(n_cores=n_cores)
+        status = "restart"
+        self.createcsv(n_cores=n_cores)
+        while status == "restart":
+            status = self.do_run_extraction(n_cores)
+            time.sleep(10)
+
+    def do_run_extraction(self, n_cores):
+        # create csv file if not exists
         search_s2 = self.find_s2_items()
         print(len(search_s2))
-        search_s2 = self.find_existing(search_s2)
-        with ProcessPoolExecutor(max_workers=mp.cpu_count()) as pool:
-            for i in range(n_cores):
-                chunks = int(len(search_s2) / n_cores)
-                start, end = i * chunks, (i + 1) * chunks
-                if end > len(search_s2):
-                    end = len(search_s2)
-                this_search_s2 = search_s2[start:end]
-                pool.submit(self.extract_s2, items=this_search_s2, core=i)
-                # Non-parallel computing use the following
-                # self.extract_s2(items=this_search_s2, core=None)
+        search_s2 = search_s2[:10]
+
+        results = []
+        if n_cores > 1:
+            futures = []
+            with ProcessPoolExecutor(max_workers=mp.cpu_count()) as pool:
+                for corenum in range(n_cores):
+                    chunks = int(len(search_s2) / n_cores)
+                    start, end = corenum * chunks, (corenum + 1) * chunks
+                    if end > len(search_s2):
+                        end = len(search_s2)
+                    this_search_s2 = search_s2[start:end]
+                    # ToDo write better findexisting
+                    this_search_s2 = self.find_existing(this_search_s2, corenum)
+                    f = pool.submit(self.extract_s2, items=this_search_s2, core=corenum)
+                    futures.append(f)
+            # import pdb; pdb.set_trace()
+            for f in futures:
+                results.append(f.result())
+        else:
+            # Non-parallel computing use the following
+            search_s2 = self.find_existing(search_s2, corenum)
+            result = self.extract_s2(items=search_s2, core=None)
+            results.append(result)
+
+        # analyse results
+        status = "succeed"
+        for result in results:
+            # import pdb; pdb.set_trace()
+            if result is None:
+                continue
+            elif result == "restart":
+                status = "restart"
+                break
+            else:  # error
+                status = "error"
+                print("Unknown Error:", str(result))
+        # status: succeed, restart , or error (unknown error)
+        return status
 
     def merge_files(self):
         """
@@ -209,7 +270,9 @@ class s2:
             files = os.path.join(self.csv_path, f"run_{collection}*.csv")
             files = glob.glob(files)
             df = pd.concat(map(pd.read_csv, files), ignore_index=True)
-            df.to_csv(os.path.join(self.csv_path, f"run_{collection}_all.csv"), index=0)
+            #ToDo Done add to only merge _all.csv
+            df = df.reset_index()
+            df.to_feather(os.path.join(self.csv_path, f"run_{collection}_all.feather"))
 
     def clean_csv(self):
         """
@@ -220,11 +283,11 @@ class s2:
         years = os.listdir(path)
         for year in years:
             path_new = os.path.join(path, year)
-            bands = [a for a in os.listdir(path_new) if a.endswith('.csv')]
+            bands = [a for a in os.listdir(path_new) if a.endswith('all.feather')]
             for band in bands:
-                file = pd.read_csv(os.path.join(path_new, band), index_col=0)
+                file = pd.read_feather(os.path.join(path_new, band), index_col=0)
                 file_new = file.dropna(axis=0, how='all', subset=file.columns[1:]).reset_index()
-                file_new.to_feather(os.path.join(path_new, band.replace('.csv', '.feather')))
+                file_new.to_feather(os.path.join(path_new, band))
 
     def field2nuts(self):
         """
@@ -237,18 +300,29 @@ class s2:
         cloud_mask = sub_scl.where(sub_scl >= 4)
         cloud_mask = cloud_mask.where(cloud_mask <= 6).notna()
         cloud_mask.index = scl.observation
-
-        all_nuts = np.unique(self.fields.g_id)
+        #ToDo adjust cloud mask that std is included too
+        if self.region=='Czechia':
+            region_code = 'NUTS4'
+        else:
+            region_code = 'g_id'
+        all_nuts = np.unique(self.fields[region_code].fillna('rest'))
         bands = [a for a in self.__class__.bands if not a=='SCL']
         for band in bands:
             file_path = os.path.join(self.csv_path, f'run_{band}_all.feather')
             file = pd.read_feather(file_path)
+            #Todo: Done reindex cloud mask
+            file, _ = bring2same_shape(file, scl)
+            cloud_mask.index = file.index
             file.iloc[:, 2:] = file.iloc[:, 2:][cloud_mask]
+
             nuts_file = file.iloc[:, :2]
             nuts_file = nuts_file.reindex(columns=['observation', 'cloud_cover[%]']+list(all_nuts))
-
             for nut in all_nuts:
-                fields_in_nuts = [int(a) for a in self.fields.FS_KENNUNG[self.fields.g_id == nut].values]
+                # Todo: Done str(int(a))
+                if self.region=='Austria':
+                    fields_in_nuts = [str(int(a)) for a in self.fields.FS_KENNUNG[self.fields[region_code] == nut].values]
+                else:
+                    fields_in_nuts = [str(a) for a in self.fields.FS_KENNUNG[self.fields[region_code] == nut].values]
                 fields_in_nuts = [a for a in fields_in_nuts if a in list(file.columns)]
                 sub_file = file.loc[:,fields_in_nuts]
                 nuts_file.loc[:,nut] = sub_file.mean(axis=1)
@@ -261,7 +335,7 @@ class s2:
         #Load first file to get all fields names
         band = self.__class__.bands[0]
         #ToDo: link below can be adjusted f'run_{band}_all_nuts.feather' for converstion of nuts level data
-        # or f'run_{band}_all.feather' for field level conversion
+        # or f'run_{band}_all.feather' for field level conversion (if self.field2nuts was not used)
         file_path = os.path.join(self.csv_path, f'run_{band}_all_nuts.feather')
         file = pd.read_feather(file_path)
         fields_o = file.columns[2:]
@@ -415,7 +489,10 @@ class s2:
                     ds[band].values = [-9999] * len(ds[band].values)
                     ds[band].values[a_mask] = band_values_masked_no_ol
                 else:
-                    band_values_masked_no_ol = removeOutliers(band_values)
+                    if np.sum(band_values>-999)>5:
+                        band_values_masked_no_ol = removeOutliers(band_values)
+                    else:
+                        band_values_masked_no_ol = band_values
                     ds[band].values = [-9999] * len(ds[band].values)
                     ds[band].values = band_values_masked_no_ol
 
@@ -511,33 +588,66 @@ def indices_calc(B2,B4,B8,B11,B12):
 
     return ndvi_ar,evi_ar,ndwi_ar,nmdi_ar
 
-def removeOutliers(x, outlierConstant=2):
+def removeOutliers(x, outlierConstant=2, fill=-9999):
     a = np.array(x)
     a_masked = a[np.where(a>-9999)]
     upper_quartile = np.percentile(a_masked, 75)
     lower_quartile = np.percentile(a_masked, 25)
     IQR = (upper_quartile - lower_quartile) * outlierConstant
     quartileSet = (lower_quartile - IQR, upper_quartile + IQR)
-    a = np.where(((a>=quartileSet[0]) & (a<=quartileSet[1])),a,-9999)
+    a = np.where(((a>=quartileSet[0]) & (a<=quartileSet[1])),a,fill)
     return a
+
+def bring2same_shape(a, scl):
+    for i in range(scl.shape[0]):
+        obs_a, obs_scl = a.iloc[i, 1], scl.iloc[i, 1]
+        cld_a, cld_scl = a.iloc[i, 2], scl.iloc[i, 2]
+        if not (obs_a==obs_scl) & (cld_a==cld_scl):
+            a = a.drop(i, axis=0)
+    a.loc[:,'index'] = range(a.shape[0])
+    a.index = range(a.shape[0])
+    return a.iloc[:scl.shape[0],:], scl
+
+def check_vi():
+    pred_file_path = rf'D:\DATA\yipeeo\Predictors\S2_L2A\cz\nc'
+    # pred_file_path = r'M:\Projects\YIPEEO\07_data\Predictors\eo_ts\s2\Spain\lleida\nc'
+    files = os.listdir(pred_file_path)
+    print(files[0])
+    s2 = xr.open_dataset(os.path.join(pred_file_path, files[0]))
+    ndvi = s2['evi'].to_series()
+    ndvi = ndvi.interpolate(method='linear')
+    ndvi = pd.DataFrame(ndvi)
+    ndvi.evi = ndvi.evi.ewm(0.5)
+    plt.plot(ndvi)
+
+
+    harvestdates = ['20190724', '20200724', '20211013', '20221112']
+    dates = [pd.to_datetime(a) for a in harvestdates]
+    for date in dates:
+        plt.vlines(date, ymin=0, ymax=1, colors='black')
+    plt.ylim([0,1])
+    plt.legend(['EVI', 'harvest date'])
+    # plt.savefig('Figures/Predictor_analysis/evi_vs_harvest.png', dpi=300)
+    plt.show()
 
 if __name__ == '__main__':
     #ToDo: this code needs to be run separately for the three crops winter wheat, maize and spring barley for the countries CZR and Austria
     warnings.filterwarnings('ignore')
     start_pro = datetime.now()
     print(start_pro)
-    # year = 2016
-    for year in range(2016,2023):
-        a = s2(region='Austria', year=year, crop='maize')
-        a.run_extraction(n_cores=1, new=False)
-        a.merge_files()
-        a.clean_csv()
-        # ToDo field2nuts saves much time, as the data is directly merged to nuts before conversion to nc.
-        #  Field data would of course by prefered, but if not feasible, aggregation can be done with the following:
-        a.field2nuts()
-
-        a.table2nc()
-        a.cleaning_s2()
-        a.add_indices2nc()
+    check_vi()
+    # leftovers = [['Czechia', 'maize'], ['Czechia', 'spring_barley'], ['Czechia', 'winter_wheat']]
+    # for lo in leftovers:
+    #     for year in range(2016,2023):
+    #         print(lo, year)
+    #         a = s2(region=lo[0], year=year, crop=lo[1])
+    #         a.merge_files()
+    #         # a.clean_csv()
+    #         # ToDo field2nuts saves much time, as the data is directly merged to nuts before conversion to nc.
+    #         #  Field data would of course be prefered, but if not feasible, aggregation can be done with the following:
+    #         a.field2nuts()
+    #         a.table2nc()
+    #         a.cleaning_s2()
+    #         a.add_indices2nc()
 
     print(f'calculation stopped and took {datetime.now() - start_pro}')

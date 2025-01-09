@@ -31,6 +31,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split, cross_val_score, cross_validate, RandomizedSearchCV, KFold
 from sklearn.metrics import explained_variance_score, r2_score
 from sklearn.dummy import DummyRegressor
+from sklearn.pipeline import make_pipeline
 
 from scikeras.wrappers import KerasRegressor
 from keras.models import Sequential, load_model
@@ -52,7 +53,7 @@ class nc2table:
         self.crop = crop
         self.farm = farm
         # Harvest dates in CZR around 25 July for winter wheat, 10 Oct for Maize, and 20 Jul Spring barley
-        self.harvest_date = {'common winter wheat': [7,25], 'winter_wheat': [7,25], 'grain maize and corn-cob-mix': [10,10], 'maize':[10,10], 'spring_barley': [7,20]}   #ToDo: dont hardcode harvest dates
+        self.harvest_date = {'common winter wheat': [7,25], 'winter_wheat': [7,25], 'winter barley': [7,30], 'grain maize and corn-cob-mix': [10,10], 'maize':[10,10], 'spring_barley': [7,20]}   #ToDo: dont hardcode harvest dates
         # self.crop_data = gpd.read_file(r'D:\DATA\yipeeo\Crop_data\Crop_yield\all\field_scale.shp')
         self.lead_times = ['_LT4','_LT3','_LT2','_LT1']
         # Harvest dates are taken from JRC for EU countries and USDA for Ukraine
@@ -62,8 +63,12 @@ class nc2table:
                                    'HU': [6, 31], 'PL': [7, 16], 'SI': [7, 16], 'SK': [7, 16], 'UA': [7, 16]}
         self.harvest_date_maize = {'AT': [9, 30], 'CZ': [9, 30], 'DE': [9, 30], 'FR': [9, 30], 'HR': [9, 30],
                                    'HU': [9, 30], 'PL': [9, 30], 'SI': [9, 30], 'SK': [9, 30], 'UA': [9, 30]}
+        if country=='ES':
+            lleida_data = gpd.read_file(r'/home/mformane/shares/climers/Projects/YIPEEO/07_data/Crop yield/Database/field_scale_lleida.shp')
+            madrid_data = gpd.read_file(r'/home/mformane/shares/climers/Projects/YIPEEO/07_data/Crop yield/Database/field_scale_madrid.shp')
+            self.crop_data = pd.concat([lleida_data, madrid_data], ignore_index=True)
 
-    def resample_s1(self, temp_step='M'):
+    def resample_s1(self, pred_file_path, temp_step='M'):
         """
         Extracts Sentinel-1 data from nc files and saves them as csv
         :param temp_step: str either M or 2W for aggregating the data monthly or Biweekly
@@ -72,25 +77,30 @@ class nc2table:
         if temp_step=='2W':
             self.lead_times = ['_LT8', '_LT7', '_LT6', '_LT5','_LT4', '_LT3', '_LT2', '_LT1']
         params = ['sig0_vv_mean_daily', 'sig0_vh_mean_daily', 'sig0_cr_mean_daily', 'sig40_vv_mean_daily', 'sig40_vh_mean_daily', 'sig40_cr_mean_daily']
-        inds = np.where((self.crop_data.country_co==self.country)&(self.crop_data.crop_type==self.crop)&(self.crop_data.c_year>2015))[0]
+        inds = np.where((self.crop_data.country_co==self.country.lower())&(self.crop_data.crop_type==self.crop)&(self.crop_data.c_year>2015))[0]
         if self.farm:
             inds = np.where((self.crop_data.farm_code == self.farm) & (self.crop_data.crop_type == self.crop) & (
                         self.crop_data.c_year > 2015))[0]
-        pred_file_path = r'D:\DATA\yipeeo\Predictors\S1\daily'
+        #pred_file_path = r'D:\DATA\yipeeo\Predictors\S1\daily'
         self.crop_data = self.crop_data.iloc[inds,:]
-
-        pipeline_df = self.crop_data.iloc[:,[1,5,10]]
+        print(self.crop_data.head())
+        pipeline_df = self.crop_data.iloc[:,[1,5,10,17]]
         pipeline_df.index = range(len(pipeline_df.index))
         col_names = [[a+b for a in params] for b in self.lead_times]
         col_names = list(itertools.chain(*col_names))
         pipeline_df.loc[:,col_names] = np.nan
 
         for df_ind, field, year in zip(pipeline_df.index, pipeline_df.field_id,pipeline_df.c_year):
-            field = field.split('_')[-1]
-            path_nc = os.path.join(pred_file_path, f'{self.country}_{field}_{year}_cleaned_cr_agg_daily.nc')
+            #field = field.split('_')[-1]
+            #path_nc = os.path.join(pred_file_path, f'{self.country}_{field}_{year}_cleaned_cr_agg_daily.nc')
+            fieldname = f'{field}_{year}_cleaned_cr_agg_daily.nc'
+            path_nc = os.path.join(pred_file_path, fieldname)
+
             if not os.path.exists(path_nc):
-                print(f'file {self.country}_{field}_{year}_cleaned_cr_agg_daily.nc does not exist')
+                print(f'file {fieldname} does not exist')
                 continue
+            else:
+                print(f'file {fieldname} exists!')
             s2 = xr.open_dataset(path_nc)
             for param in params:
                 this_cols = [a for a in pipeline_df.columns if a.startswith(param)]
@@ -111,7 +121,7 @@ class nc2table:
         else:
             pipeline_df.to_csv(f'Data/{temp_step}/{self.country}/{self.crop}_s1.csv')
 
-    def resample_s2(self, temp_step='M'):
+    def resample_s2(self, pred_file_path, temp_step='M'):
         """
         Extracts Sentinel-2 data from nc files and saves them as csv
         :param temp_step: str either M or 2W for aggregating the data monthly or Biweekly
@@ -120,15 +130,19 @@ class nc2table:
         if temp_step=='2W':
             self.lead_times = ['_LT8', '_LT7', '_LT6', '_LT5','_LT4', '_LT3', '_LT2', '_LT1']
         params = ['ndvi', 'evi', 'ndwi', 'nmdi']
-        inds = np.where((self.crop_data.country_co==self.country)&(self.crop_data.crop_type==self.crop)&
+        inds = np.where((self.crop_data.country_co==self.country.lower())&(self.crop_data.crop_type==self.crop)&
                         (self.crop_data.c_year>2015))[0]
         if self.farm:
             inds = np.where((self.crop_data.farm_code == self.farm) & (self.crop_data.crop_type == self.crop) & (
                         self.crop_data.c_year > 2015))[0]
-        pred_file_path = rf'D:\DATA\yipeeo\Predictors\S2_L2A\{self.country}\nc'
+        #pred_file_path = rf'D:\DATA\yipeeo\Predictors\S2_L2A\{self.country}\nc'
+        if isinstance(pred_file_path, list):
+            pathlist = True
+        else:
+            pathlist = False
         self.crop_data = self.crop_data.iloc[inds,:]
 
-        pipeline_df = self.crop_data.iloc[:,[1,5,10]]
+        pipeline_df = self.crop_data.iloc[:,[1,5,10,17]]
         pipeline_df.index = range(len(pipeline_df.index))
 
         col_names = [[a+b for a in params] for b in self.lead_times]
@@ -138,7 +152,15 @@ class nc2table:
         for df_ind, field, year in zip(pipeline_df.index, pipeline_df.field_id,pipeline_df.c_year):
             for param in params:
                 this_cols = [a for a in pipeline_df.columns if a.startswith(param)]
-                s2 = xr.open_dataset(os.path.join(pred_file_path, f'{field}.nc'))
+                if pathlist:
+                    for pred_path in pred_file_path:
+                        path_nc = os.path.join(pred_path, f'{field}.nc')
+                        if os.path.exists(path_nc):
+                            break
+                else:
+                    path_nc = os.path.join(pred_file_path, f'{field}.nc')
+
+                s2 = xr.open_dataset(path_nc)
                 ndvi = s2[param].to_series()
                 ndvi_m = ndvi.resample(temp_step).mean()
                 this_harvest_date = pd.to_datetime(f'{year}-{self.harvest_date[self.crop][0]}-{self.harvest_date[self.crop][1]-1}') #harvest date -2 days to make sure harvested field is not included
@@ -549,21 +571,28 @@ class ml:
         self.nameconvert = {'maize':'grain maize and corn-cob-mix', 'winter_wheat':'common winter wheat', 'spring_barley':'spring barley'}
 
     #---------------------------------------------- Exploratory data analysis ----------------------------------------
-    def calc_corrs(self):
+    def calc_corrs(self, filename):
         """
         :return: calculates correlations between predictors and crop yields
         """
-        file = pd.read_csv(f'Data/M/{self.country}/{self.crop}_all_2018.csv', index_col=0)
-        predictors = list(file.columns[3:])
-        predictors.remove('prev_year_crop')
+        #file = pd.read_csv(f'Data/M/{self.country}/{self.crop}_all_2018.csv', index_col=0)
+        file = pd.read_csv(filename, index_col=0)
+        predictors = list(file.columns[4:])
+        if 'prev_year_crop' in predictors:
+            predictors.remove('prev_year_crop')
+        if 'date_last_obs' in predictors:
+            predictors.remove('date_last_obs')
         crop_yield = file.loc[:, 'yield']
         index = np.unique([a[:-4] for a in predictors])
-        forecast_month = [f'LT{i}' for i in [4,3,2,1]]
+        print(index)
+        lead_times = self.get_lead_times()
+        forecast_month = [f'LT{i}' for i in lead_times]
         corr_df = pd.DataFrame(columns=forecast_month, index=index)
         corr_low = pd.DataFrame(columns=forecast_month, index=index)
         corr_high = pd.DataFrame(columns=forecast_month, index=index)
 
         for d, dep_var in enumerate(index):
+            print(d, dep_var)
             for m, fc_month in enumerate(forecast_month):
                 cor_file = pd.DataFrame([crop_yield, file.loc[:, f'{dep_var}_{fc_month}']]).transpose()
                 cor_file = cor_file.dropna(axis=0)
@@ -583,7 +612,7 @@ class ml:
         # corr_high.to_csv(f'Results/explore_data/Spearman_{self.crop}_2018_high.csv')
         return corr_df, corr_high, corr_low
 
-    def plot_corrs(self):
+    def plot_corrs(self, filename):
         """
         :param correlation_dataframe: df in the format as returning from calculate_correlations
             considered months as columns, dataset names as index
@@ -592,7 +621,7 @@ class ml:
 
         :return: shows a figure of the correlations of each dataset to the yields
         """
-        corr_df, corr_high, corr_low = self.calc_corrs()
+        corr_df, corr_high, corr_low = self.calc_corrs(filename)
         yers = corr_high - corr_low
 
         independent_variables = corr_df.index
@@ -625,7 +654,9 @@ class ml:
         plt.legend(leg_names, loc=0, ncol=4, fontsize=16)
         plt.subplots_adjust(left=0.1, right=0.98, top=0.95, bottom=0.1)
         # plt.show()
-        plt.savefig(f'Figures/Predictor_analysis/corr_{self.crop}', dpi=300)
+        if not os.path.exists(f'Figures/{self.temp_res}/Predictor_analysis/'):
+            os.makedirs(f'Figures/{self.temp_res}/Predictor_analysis/')
+        plt.savefig(f'Figures/{self.temp_res}/Predictor_analysis/corr_{self.crop}.png', dpi=300)
         plt.close()
 
     def cross_cor_predictors(self, lt=None, preds=None):
@@ -690,16 +721,19 @@ class ml:
         rf_random.fit(train_features, train_labels)
         # print(rf_random.best_params_)
         estimator.set_params(**rf_random.best_params_)
-        pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+        #pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+        pipe = make_pipeline(StandardScaler(), estimator)
         scores_kf = cross_val_score(pipe, X, y, cv=20, scoring="explained_variance")
         return rf_random.best_params_
 
     #---------------------------------------------- Set up models ----------------------------------------------------
-    def runforecast(self, lead_time, model='RF', merge_months=False, feature_select=False, hyper_tune=False):
-        X, X_test, y, y_test = self.get_train_test(lead_time=lead_time, merge_months=merge_months)
+    def runforecast(self, lead_time, model='RF', merge_months=False, feature_select=False, hyper_tune=False, filename = None):
+        X, X_test, y, y_test = self.get_train_test(lead_time=lead_time, filename=filename, merge_months=merge_months)
         estimator = self.get_default_regressions(model)
-        pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
-        scores_kf = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
+        #pipe = Pipeline([('scaler', StandardScaler()), ('clf', RandomFor)])
+        pipe = make_pipeline(StandardScaler(), estimator)
+        print(pipe)
+        scores_kf = cross_val_score(pipe, X, y, cv=5, scoring="explained_variance")
         print(f'test perf for lead_time:{lead_time}, R^2: {np.median(scores_kf)}')
         if feature_select:
             selected_features, X_s, _ = self.feature_selection(X,y, model=model, n_features=10)
@@ -718,12 +752,32 @@ class ml:
             scores_kf_fe = []
 
         if hyper_tune:
-            X, X_test, y, y_test = self.get_train_test(lead_time=lead_time, merge_months=merge_months)
-            hp_tuned_vals = self.hyper_tune(lead_time=lead_time, model=model, selected_features=X.columns)
-            estimator.set_params(**hp_tuned_vals)
-            pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
-            scores_kf_hp = cross_val_score(pipe, X, y, cv=30, scoring="explained_variance")
-            print(f'train perf for lead_time:{lead_time} after hp tuning, R^2: {np.median(scores_kf_hp)}')
+            params = None
+            if model == 'XGB':
+                params = {'max_depth': [3, 6, 10],
+                          'learning_rate': [0.1, 0.3, 0.5],
+                          'n_estimators': [100, 500, 1000],
+                          'colsample_bytree': [0.5, 1]}
+
+            elif model == 'RF':
+                params = {'randomforestregressor__max_depth': [20, None],
+                          'randomforestregressor__min_samples_split': [2, 5, 10],
+                          'randomforestregressor__n_estimators': [50, 100, 250],
+                          'randomforestregressor__bootstrap': [True, False]}
+            rf_random = RandomizedSearchCV(estimator=pipe, param_distributions=params, n_iter=50, cv=5, n_jobs=6,
+                                           verbose=0, random_state=1)
+            rf_random.fit(X, y)
+            best_hp = rf_random.best_params_
+            best_estimator = rf_random.best_estimator_
+            scores_kf_hp = best_estimator.score(X_test, y_test)
+            print(f'best hyperparameters: {best_hp}')
+            print(f'test score: {scores_kf_hp}')
+            #X, X_test, y, y_test = self.get_train_test(lead_time=lead_time, merge_months=merge_months)
+            #hp_tuned_vals = self.hyper_tune(X, y, model=model, selected_features=X.columns)
+            #estimator.set_params(**hp_tuned_vals)
+            #pipe = Pipeline([('scalar', StandardScaler()), ('clf', estimator)])
+            #scores_kf_hp = cross_val_score(pipe, X, y, cv=5, scoring="explained_variance")
+            #print(f'train perf for lead_time:{lead_time} after hp tuning, R^2: {np.median(scores_kf_hp)}')
         else:
             scores_kf_hp = []
 
@@ -746,7 +800,8 @@ class ml:
         file = file.dropna(axis=0)
         predictors = [p for p in file.columns[3:] if not p == 'date_last_obs']
 
-        lead_times = [4,3,2,1]
+        #lead_times = [4,3,2,1]
+        lead_times = self.get_lead_times()
         cols = ['year', 'observed'] + [f'forecast_LT_{lt}' for lt in lead_times]
         results = pd.DataFrame(index=[], columns=cols)
         estimator = self.get_default_regressions(model)
@@ -794,7 +849,8 @@ class ml:
         file_train = file_train.dropna(axis=0)
         file_test = file_test.dropna(axis=0)
         predictors = [p for p in file_train.columns[3:] if not p == 'date_last_obs']
-        lead_times = [4,3,2,1]
+        #lead_times = [4,3,2,1]
+        lead_times = self.get_lead_times()
         cols = ['year', 'observed'] + [f'forecast_LT_{lt}' for lt in lead_times]
         results = pd.DataFrame(index=[], columns=cols)
         results.iloc[:,:2] = file_test.iloc[:,1:3]
@@ -1041,14 +1097,17 @@ class ml:
         if cv_method == 'loocv':
             results_values.to_csv(f'{self.path_out}/{self.crop}_values_{lead_time}_{perc_tl_samples}.csv')
 
-
-    #--------------------------------------------- Run and evaluate models -------------------------------------------
-    def write_results(self):
-        cols = ['lead_time', 'default_run', 'FE', 'HPT', 'FE&HPT']
+    def get_lead_times(self):
         if self.temp_res=='2W':
             lead_times = [8, 7, 6, 5, 4, 3, 2, 1]
         elif self.temp_res=='M':
             lead_times = [4, 3, 2, 1]
+        return lead_times
+
+    #--------------------------------------------- Run and evaluate models -------------------------------------------
+    def write_results(self):
+        cols = ['lead_time', 'default_run', 'FE', 'HPT', 'FE&HPT']
+        lead_times = self.get_lead_times()
         csv_file = pd.DataFrame(data=None, index=lead_times, columns=cols)
         csv_file.loc[:, 'lead_time'] = lead_times
         for lt,lead_time in enumerate(lead_times):
@@ -1057,10 +1116,7 @@ class ml:
 
     def s1_vs_s2(self, model='XGB'):
         cols = ['s1', 's2', 'both']
-        if self.temp_res=='2W':
-            lead_times = [8, 7, 6, 5, 4, 3, 2, 1]
-        elif self.temp_res=='M':
-            lead_times = [4, 3, 2, 1]
+        lead_times = self.get_lead_times()
         csv_file = pd.DataFrame(data=None, index=lead_times, columns=cols)
         for lead_time in lead_times:
             for predictor in cols:
@@ -1086,7 +1142,8 @@ class ml:
 
     def s1_vs_s2_eco(self, model):
         cols = ['s1', 's2', 'eco', 's1-s2', 'all']
-        lead_times = [4, 3, 2, 1]
+        #lead_times = [4, 3, 2, 1]
+        lead_times = self.get_lead_times()
         csv_file = pd.DataFrame(data=None, index=lead_times, columns=cols)
         for lead_time in lead_times:
             for predictor in cols:
@@ -1315,13 +1372,18 @@ class ml:
             file = file.loc[:,used_pred]
         return file
 
-    def get_train_test(self, lead_time, merge_months=False):
+    def get_train_test(self, lead_time, filename=None, merge_months=False):
+        if filename is None:
+            if self.farm:
+                filename = f'Data/{self.temp_res}/{self.country}/{self.farm}_{self.crop}_s1s2.csv'
+            else:
+                filename = f'Data/{self.temp_res}/{self.country}/{self.crop}_s1s2.csv'
         if self.farm:
-            file = pd.read_csv(f'Data/{self.temp_res}/{self.country}/{self.farm}_{self.crop}_s1s2.csv', index_col=0)
+            file = pd.read_csv(filename, index_col=0)
         else:
-            file = pd.read_csv(f'Data/{self.temp_res}/{self.country}/{self.crop}_s1s2.csv', index_col=0)
+            file = pd.read_csv(filename, index_col=0)
         file = file.dropna(axis=0)
-        predictors = [p for p in file.columns[3:] if not p in ['date_last_obs', 'prev_year_crop']]
+        predictors = [p for p in file.columns[4:] if not p in ['date_last_obs', 'prev_year_crop']]
         used_predictors = [a for a in predictors if int(a[-1]) >= lead_time]
         # used_predictors.append('prev_year_crop')
         if merge_months:
@@ -1644,11 +1706,13 @@ def run_dl():
 
 if __name__ == '__main__':
     #Later: deep learn, other numbers of features for FS-> self optimize number of features
+    s1_path = '/home/mformane/shares/climers/Projects/YIPEEO/07_data/Predictors/eo_ts/s1/field_level'
     pd.set_option('display.max_columns', 15)
     warnings.filterwarnings('ignore')
     start_pro = datetime.now()
-    a = nc2table(country='EU', crop='maize')
-    a.resample_era_EU(era=False)
+    a = nc2table(country='ES', crop='common winter wheat')
+    a.resample_s1(s1_path, temp_step='M')
+    #a.resample_era_EU()
     # run_write_reg()
     # write_res(method='local_trained')
     # for country in ['Austria', 'Czechia']:

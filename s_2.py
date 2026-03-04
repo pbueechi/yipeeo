@@ -13,6 +13,7 @@ import matplotlib.gridspec as gridspec
 import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from rasterio import plot as rasterplot
 from scipy import stats as st
 from pyproj import Proj, transform
 from PIL import Image
@@ -404,10 +405,8 @@ def plot_s2_class(region, year=None):
     :param region: str of region where fields are located which will be extract from S-2 L2A data. So far available: czr, nl, rom, ukr_chmel, ukr_horod, ukr_lviv
     :return: dataframe of S2 observations per field
     """
-    print('started calculating...')
-
     # Load fields and remove identical fields
-    fields = gpd.read_file(rf'D:\DATA\yipeeo\Crop_data\Crop_yield\all\field_scale_{region}.shp')
+    fields = gpd.read_file(rf'D:\DATA\yipeeo\Crop_data\Crop_yield\all\old\field_scale_{region}.shp')
     year_min, year_max = np.nanmin(fields.c_year.values), np.nanmax(fields.c_year.values)
 
     if year_max < 2016:
@@ -422,6 +421,7 @@ def plot_s2_class(region, year=None):
     # Define bounding box around fields where S2 data will be loaded from
     xmin, xmax = fields.bounds.min(0).minx, fields.bounds.max(0).maxx
     ymin, ymax = fields.bounds.min(0).miny, fields.bounds.max(0).maxy
+
     area_of_interest = {
         "type": "Polygon",
         "coordinates": [[
@@ -449,7 +449,7 @@ def plot_s2_class(region, year=None):
         collections=["sentinel-2-l2a"],
         intersects=area_of_interest,
         datetime=time_of_interest,
-        query={"eo:cloud_cover": {"lt": 25}},  # Only scenes with cloud cover < 25% ar considered
+        query={"eo:cloud_cover": {"lt": 30}},  # Only scenes with cloud cover < 25% ar considered
     )
 
     items = search.item_collection()
@@ -458,9 +458,11 @@ def plot_s2_class(region, year=None):
     row_head = ['observation', 'cloud_cover[%]'] + list(fields.field_id.values)
 
     most_cloudy_item = max(items, key=lambda item: eo.ext(item).cloud_cover)
+    print(most_cloudy_item)
+    print(most_cloudy_item.datetime.date())
 
     fig = plt.figure(figsize=(20, 8))
-    outer = gridspec.GridSpec(1, 2, width_ratios=[0.5, 0.5])
+    outer = gridspec.GridSpec(1, 2, width_ratios=[0.526, 0.5], wspace=0.11)
     ax1 = plt.Subplot(fig, outer[0])
 
     asset_href = most_cloudy_item.assets["visual"].href
@@ -485,13 +487,20 @@ def plot_s2_class(region, year=None):
     target_h = (int)(target_w / aspect)
     a = img.resize((target_w, target_h), Image.Resampling.BILINEAR)
 
-    ticks_size=20
+    ticks_size=22
     #Plot optical data
-    ax1.imshow(a)
-    ax1.set_xticks(np.linspace(0, a.size[0], num=5), np.round(np.linspace(x1, x2, num=5), 1), fontsize=ticks_size)
-    ax1.set_yticks(np.linspace(a.size[1], 0, num=5), np.round(np.linspace(y1, y2, num=5), 1), fontsize=ticks_size)
+    ax1.imshow(a, extent=[x1,x2,y1,y2], aspect='equal')
+    # rasterplot.show(a, extent=[x1,x2,y1,y2], ax=ax1)
+    # ax1.set_xlim(x1, x2)
+    # ax1.set_ylim(y2, y1)
+    ax1.set_xticks(np.round(np.linspace(x1, x2, num=5), 1), np.round(np.linspace(x1, x2, num=5), 1), fontsize=ticks_size)
+    ax1.set_yticks(np.round(np.linspace(y1, y2, num=6), 1), np.round(np.linspace(y1, y2, num=6), 1), fontsize=ticks_size)
+
+    fields.boundary.plot(ax=ax1, color='red', linewidth=1, label='Fields')
     ax1.set_ylabel('Lat [°]', fontsize=ticks_size)
     ax1.set_xlabel('Lon [°]', fontsize=ticks_size)
+    ax1.legend(fontsize=ticks_size)
+
     fig.add_subplot(ax1)
 
     #Load Scene Classification and set plot axis
@@ -504,7 +513,7 @@ def plot_s2_class(region, year=None):
                    6:'Water',7:'Unclassified',8:'Cloud medium prob',9:'Cloud high prob',10:'Thin cirrus',11:'Snow/ice'}
     values = np.unique(band_data)
     img = Image.fromarray(band_data[0,:,:])
-    im=ax1.imshow(img, cmap='jet')
+    im=ax1.imshow(img, cmap='jet', aspect='equal')
     colors = [im.cmap(im.norm(value)) for value in values]
     # create a patch (proxy artist) for every color
     patches = [mpatches.Patch(color=colors[i], label="{l}".format(l=scl_classes[values[i]])) for i in range(len(values))]
@@ -514,10 +523,12 @@ def plot_s2_class(region, year=None):
     ax1.set_xticks(np.linspace(0,ds.width,num=5), np.round(np.linspace(x1,x2, num=5),1), fontsize=ticks_size)
     ax1.set_yticks([])
     ax1.set_xlabel('Lon [°]', fontsize=ticks_size)
+
     fig.add_subplot(ax1)
-    fig.subplots_adjust(left=0.06, right=0.77, bottom=0.07, top=0.99)
+    fig.subplots_adjust(left=0.06, right=0.76, bottom=0.05, top=0.99)
     # fig.tight_layout()
-    plt.savefig('Figures/scene_class_25.png', dpi=300)
+    plt.show()
+    # plt.savefig('Results/Figs/cloud_mask.png', dpi=300)
 
 def plot_s2_ex(region):
     """
@@ -574,7 +585,7 @@ if __name__ == '__main__':
     # plot_s2_class(region='czr')
     # extract_s2(region='polk', new=False)
     # cleaning_s2(region='czr')
-    plot_s2_ex(region='czr')
+    # plot_s2_ex(region='czr')
 
     # for region in ['polk']:
     #     print(region)
@@ -583,5 +594,5 @@ if __name__ == '__main__':
     #     cleaning_s2(region=region)
     #     add_indices2nc(file_path=rf'D:\data-write\YIPEEO\predictors\S2_L2A\ts\{region}\nc\cleaned')
     # ecostress()
-    print(f'calculation stopped and took {datetime.now() - start_pro}')
+    # print(f'calculation stopped and took {datetime.now() - start_pro}')
     # parallel_run(path=field_shape_path)

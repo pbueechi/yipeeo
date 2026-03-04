@@ -1,0 +1,7 @@
+# Data folders (adjust to your folder names)
+Data/
+Figures/
+Results/
+venv/
+.venv/
+

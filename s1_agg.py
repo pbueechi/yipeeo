@@ -2,6 +2,7 @@ import os
 import math
 import itertools
 import random
+import shutil
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -21,7 +22,7 @@ def agg_s1(path, crop, country, subsample=False):
     regions = [a.split('_')[region_ind] for a in files]
     regions_unique = np.unique(regions)
 
-    for region in regions_unique[26:]:
+    for region in regions_unique[39:]:
         used_files = [a for a in files if a.split('_')[region_ind]==region]
         if subsample:
             if len(used_files)>1500:
@@ -54,9 +55,26 @@ def convert_db(a_list, to):
         a_conv = [10 ** (a / 10) for a in a_list]
     return a_conv
 
+def copy_files():
+    basepath = 'D:\DATA\yipeeo\Predictors\S2_L2A'
+    countries = ['Austria', 'Czechia']
+    crops = ['spring_barley', 'winter_wheat', 'maize']
+    for country in countries:
+        for crop in crops:
+            path = os.path.join(basepath, country, crop)
+            years = os.listdir(path)
+            for year in years:
+                from_path = os.path.join(path, year, 'nc/cleaned/new')
+                to_path = os.path.join(r'M:\Projects\YIPEEO\07_data\Predictors\eo_ts\s2\country', country, crop, year)
+                if not os.path.exists(to_path):
+                    os.makedirs(to_path)
+                for file in os.listdir(from_path):
+                    shutil.copyfile(os.path.join(from_path, file), os.path.join(to_path, file))
+
 if __name__=='__main__':
     path = r'D:\DATA\yipeeo\Predictors\S1'
+    path = r'M:\Projects\YIPEEO\07_data\Predictors\eo_ts\s1\NUTS2_3'
     for crop in ['winter_wheat']:
         start = datetime.now()
-        agg_s1(path, crop=crop, country='AUT', subsample=True)
+        agg_s1(path, crop=crop, country='CZ', subsample=True)
         print(f'calculation for {crop} took {datetime.now()-start}')
